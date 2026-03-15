@@ -25,10 +25,40 @@
 
 
 ## Environment
+
+### Docker
+
 We provide the Docker Image to run our 3D-LLaVA. Please run the following code to pull the docker image:
 ```
 docker pull djiajun1206/3d-llava-slim
 ```
+
+### Conda
+
+We provide the conda environment to run our 3D-LLaVA. Please run the following code to create the conda environment:
+```
+conda create -n llava python=3.10 -y
+conda activate llava
+pip install --upgrade pip  # enable PEP 660 support
+pip install -e .
+pip install -e ".[train]" --no-build-isolation
+
+pip install flash-attn==2.3.6 --no-build-isolation
+pip install git+https://github.com/openai/CLIP.git
+pip install spconv-cu120
+pip install -U mmengine pycocoevalcap
+
+# precise eval
+cd libs/pointops
+python setup.py install
+cd ../..
+
+conda install -c bioconda google-sparsehash 
+cd libs/pointgroup_ops
+python setup.py install --include_dirs=${CONDA_PREFIX}/include
+cd ../..
+```
+
 
 ## Data
 We conduct experiments with the scans data from Scannet, as well as the text description from ScanRefer, ScanQA, SQA3D, ReferIt3D and Multi3DRefer. To enable conventiently getting access to the data, we provide the [processed data](https://huggingface.co/datasets/djiajunustc/3D-LLaVA-Data). The data are supposed to be placed in ./playground, and the data structure is as follows:

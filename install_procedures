@@ -1,0 +1,21 @@
+conda create -n llava python=3.10 -y
+conda activate llava
+pip install --upgrade pip  # enable PEP 660 support
+pip install -e .
+pip install -e ".[train]" --no-build-isolation
+
+pip install flash-attn==2.3.6 --no-build-isolation
+pip install git+https://github.com/openai/CLIP.git
+pip install spconv-cu120
+pip install -U mmengine pycocoevalcap
+
+# precise eval
+cd libs/pointops
+python setup.py install
+cd ../..
+
+conda install -c bioconda google-sparsehash 
+cd libs/pointgroup_ops
+python setup.py install --include_dirs=${CONDA_PREFIX}/include
+cd ../..
+
