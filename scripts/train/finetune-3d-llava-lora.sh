@@ -1,3 +1,4 @@
+export CUDA_VISIBLE_DEVICES=2,3
 
 # referring seg
 export scanrefer=./playground/data/train_info/scanrefer_train_3d_llava.json

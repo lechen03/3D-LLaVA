@@ -1,6 +1,6 @@
 # !/bin/bash
 
-export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+export CUDA_VISIBLE_DEVICES=2,3
 export PYTHONPATH=$(pwd)
 
 gpu_list="${CUDA_VISIBLE_DEVICES:-0}"
@@ -13,7 +13,7 @@ EXP_NAME=finetune-3d-llava-lora
 for IDX in $(seq 0 $((CHUNKS-1))); do
     CUDA_VISIBLE_DEVICES=${GPULIST[$IDX]} python -m llava.eval.model_sqa3d \
         --scan-folder ./playground/data/scannet/val \
-        --model-path djiajunustc/3D-LLaVA-7B-LoRA \
+        --model-path checkpoints/finetune-3d-llava-lora \
         --model-base liuhaotian/llava-v1.5-7b \
         --question-file ./playground/data/eval_info/sqa3d/sqa3d_test_question.json \
         --answers-file ./playground/predictions/$EXP_NAME/sqa3d/${CHUNKS}_${IDX}.jsonl \
