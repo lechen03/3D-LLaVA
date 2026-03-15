@@ -53,16 +53,33 @@ def load_pretrained_model(model_path, model_base, model_name, pointcloud_tower_n
             from llava.model.language_model.llava_llama import LlavaConfig
             lora_cfg_pretrained = LlavaConfig.from_pretrained(model_path)
             
+            import copy
+            lora_cfg_original_vocab_size = copy.deepcopy(lora_cfg_pretrained)
+            if 'checkpoints' in model_path.lower():
+                print("using vocab size 32000 to initialize model", flush=True)
+                lora_cfg_original_vocab_size.vocab_size = lora_cfg_pretrained.vocab_size - 1 # 32001-1 = 32000
+                assert lora_cfg_original_vocab_size.vocab_size == 32000
+
             if os.path.exists(os.path.join(model_path, 'tokenizer.model')):
                 tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=False)
             else:
                 tokenizer = AutoTokenizer.from_pretrained(model_base, use_fast=False)
 
+            # print('Loading LLaVA from base model...')
+            # model = LlavaLlamaForCausalLM.from_pretrained(model_base, low_cpu_mem_usage=True, config=lora_cfg_pretrained, **kwargs)
+            # token_num, token_dim = model.lm_head.out_features, model.lm_head.in_features
+
             print('Loading LLaVA from base model...')
-            model = LlavaLlamaForCausalLM.from_pretrained(model_base, low_cpu_mem_usage=True, config=lora_cfg_pretrained, **kwargs)
+            model = LlavaLlamaForCausalLM.from_pretrained(model_base, low_cpu_mem_usage='device_map' in kwargs, config=lora_cfg_original_vocab_size, **kwargs)
             token_num, token_dim = model.lm_head.out_features, model.lm_head.in_features
 
-            if model.lm_head.weight.shape[0] != token_num:
+            # if model.lm_head.weight.shape[0] != token_num:
+            #     model.lm_head.weight = torch.nn.Parameter(torch.empty(token_num, token_dim, device=model.device, dtype=model.dtype))
+            #     model.model.embed_tokens.weight = torch.nn.Parameter(torch.empty(token_num, token_dim, device=model.device, dtype=model.dtype))
+
+            if 'checkpoints' in model_path.lower():
+                token_num = lora_cfg_pretrained.vocab_size
+                print(f"Resizing lm_head and embed_tokens from {model.lm_head.weight.shape[0]} to {token_num}")
                 model.lm_head.weight = torch.nn.Parameter(torch.empty(token_num, token_dim, device=model.device, dtype=model.dtype))
                 model.model.embed_tokens.weight = torch.nn.Parameter(torch.empty(token_num, token_dim, device=model.device, dtype=model.dtype))
 
