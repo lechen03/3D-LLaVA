@@ -222,8 +222,8 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
         use_cache: Optional[bool] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
-        images: Optional[torch.FloatTensor] = None,
-        image_sizes: Optional[List[List[int]]] = None,
+        images: Optional[torch.FloatTensor] = None,  # llama does not have this parameter
+        image_sizes: Optional[List[List[int]]] = None,  # llama does not have this parameter
         return_dict: Optional[bool] = None,
         # added ones start here
         coord: Optional[torch.FloatTensor] = None,
