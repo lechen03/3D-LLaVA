@@ -62,7 +62,8 @@ IS_TOKENIZER_GREATER_THAN_0_14 = version.parse(tokenizers.__version__) >= versio
 
 @dataclass
 class ModelArguments:
-    model_name_or_path: Optional[str] = field(default="facebook/opt-125m")
+    # field() lets you customize attributes of a dataclass field — things like default values, metadata
+    model_name_or_path: Optional[str] = field(default="facebook/opt-125m")  
     version: Optional[str] = field(default="v0")
     freeze_backbone: bool = field(default=False)
     tune_mm_mlp_adapter: bool = field(default=False)
@@ -1095,6 +1096,11 @@ def make_supervised_data_module(tokenizer: transformers.PreTrainedTokenizer,
 
 
 def train(attn_implementation=None):
+
+    # Section 1: Argument Parsing & Precision Setup
+    # Parses CLI arguments into three dataclasses: ModelArguments, DataArguments, TrainingArguments.
+    # Determines the compute dtype based on fp16/bf16 flags.
+    # >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
     global local_rank
 
     parser = transformers.HfArgumentParser(
@@ -1102,7 +1108,14 @@ def train(attn_implementation=None):
     model_args, data_args, training_args = parser.parse_args_into_dataclasses()
     local_rank = training_args.local_rank
     compute_dtype = (torch.float16 if training_args.fp16 else (torch.bfloat16 if training_args.bf16 else torch.float32))
+    # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+    
 
+    # Section 2: Quantization Config
+    # Sets up BitsAndBytes (4-bit or 8-bit) quantization if training_args.bits is 4 or 8. 
+    # This is used for QLoRA-style memory-efficient fine-tuning. 
+    # It skips quantizing mm_projector and configures double quantization + quant type (fp4/nf4).
+    # >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
     bnb_model_from_pretrained_args = {}
     if training_args.bits in [4, 8]:
         from transformers import BitsAndBytesConfig
@@ -1121,9 +1134,23 @@ def train(attn_implementation=None):
                 bnb_4bit_quant_type=training_args.quant_type # {'fp4', 'nf4'}
             )
         ))
+    # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
+
+    # Section 3: Model Loading
+    # Three branches:
+    #   - With vision/pointcloud tower + MPT backbone → loads LlavaMptForCausalLM
+    #   - With vision/pointcloud tower + LLaMA backbone → loads LlavaLlamaForCausalLM
+    #   - No towers (text-only) → loads vanilla LlamaForCausalLM
+    # In multimodal LLMs, a tower is a dedicated encoder that processes one input modality 
+    # and projects it into the LLM's token embedding space.
+    # The key architectural flow is:
+    #   - image → Vision Tower → mm_projector → LLM backbone
+    #   - point cloud → Pointcloud Tower → mm_projector → LLM backbone
+    #   - text → Tokenizer → embed_tokens → LLM backbone
+    # >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
     if model_args.vision_tower is not None or model_args.pointcloud_tower is not None:
-        if 'mpt' in model_args.model_name_or_path:
+        if 'mpt' in model_args.model_name_or_path:  # an alternative to LLaMA as a backbone LLM
             config = transformers.AutoConfig.from_pretrained(model_args.model_name_or_path, trust_remote_code=True)
             config.attn_config['attn_impl'] = training_args.mpt_attn_impl
             model = LlavaMptForCausalLM.from_pretrained(
@@ -1132,7 +1159,7 @@ def train(attn_implementation=None):
                 cache_dir=training_args.cache_dir,
                 **bnb_model_from_pretrained_args
             )
-        else:
+        else:  # in this project, go with this branch
             model = LlavaLlamaForCausalLM.from_pretrained(
                 model_args.model_name_or_path,
                 cache_dir=training_args.cache_dir,
@@ -1148,16 +1175,29 @@ def train(attn_implementation=None):
             torch_dtype=(torch.bfloat16 if training_args.bf16 else None),
             **bnb_model_from_pretrained_args
         )
-    model.config.use_cache = False
+    model.config.use_cache = False  # disable KV cache for training
+    # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
+
+    # Section 4: Backbone Freezing
+    # If freeze_backbone is set, freezes the entire base model (model.model) by setting
+    # requires_grad_(False).
+    # >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
     if model_args.freeze_backbone:
         model.model.requires_grad_(False)
+    # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+    
 
+    # Section 5: QLoRA Preparation
+    # If quantized: wraps model with prepare_model_for_kbit_training from PEFT
+    # If gradient checkpointing: ensures input embeddings require gradients (needed for 
+    # checkpointing to work with frozen models)
+    # >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
     if training_args.bits in [4, 8]:
         from peft import prepare_model_for_kbit_training
         model.config.torch_dtype=(torch.float32 if training_args.fp16 else (torch.bfloat16 if training_args.bf16 else torch.float32))
         model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=training_args.gradient_checkpointing)
-
+    
     if training_args.gradient_checkpointing:
         if hasattr(model, "enable_input_require_grads"):
             model.enable_input_require_grads()
@@ -1165,7 +1205,14 @@ def train(attn_implementation=None):
             def make_inputs_require_grad(module, input, output):
                 output.requires_grad_(True)
             model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
+    # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
+
+    # Section 6: LoRA Adapter Setup
+    # If lora_enable, creates a LoraConfig (rank, alpha, dropout, target modules) and wraps the
+    # model with get_peft_model. The target modules are auto-discovered via find_all_linear_names,
+    # excluding multimodal-specific modules.
+    # >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
     if training_args.lora_enable:
         from peft import LoraConfig, get_peft_model
         lora_config = LoraConfig(
@@ -1183,7 +1230,15 @@ def train(attn_implementation=None):
                 model.to(torch.float16)
         rank0_print("Adding LoRA adapters...")
         model = get_peft_model(model, lora_config)
+    # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
+
+    # Section 7: Tokenizer Setup
+    # - Loads the tokenizer from the model path
+    # - Handles pad token: for v0, adds [PAD] as a new special token and resizes embeddings; for
+    # other versions, sets pad_token = unk_token
+    # - Sets the conversation template (defaults to vicuna_v1)
+    # >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
     if 'mpt' in model_args.model_name_or_path:
         tokenizer = transformers.AutoTokenizer.from_pretrained(
             model_args.model_name_or_path,
@@ -1191,7 +1246,7 @@ def train(attn_implementation=None):
             model_max_length=training_args.model_max_length,
             padding_side="right"
         )
-    else:
+    else:  # in this project, go with this branch
         tokenizer = transformers.AutoTokenizer.from_pretrained(
             model_args.model_name_or_path,
             cache_dir=training_args.cache_dir,
@@ -1215,7 +1270,21 @@ def train(attn_implementation=None):
             conversation_lib.default_conversation = conversation_lib.conv_templates[model_args.version]
         else:
             conversation_lib.default_conversation = conversation_lib.conv_templates["vicuna_v1"]
+    # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
+
+    # Section 8: Multimodal Module Initialization
+    # - Vision tower: initializes, moves to GPU, attaches image processor to data_args
+    # - Pointcloud tower: initializes and moves to GPU
+    # - Pointcloud decoder: initializes, optionally freezes (freeze_pointcloud_decoder)
+    # - Special tokens: adds [SEG] token for segmentation, resizes embeddings, records its index
+    # - Gradient control: enables grad for lm_head and embed_tokens; freezes pointcloud tower
+    # selectively (only whitelisted keyword modules remain trainable)
+    # - MLP adapter tuning: if tune_mm_mlp_adapter, freezes everything except mm_projector,
+    # lm_head_seg, hidden_seg_fc, and alignment_proj
+    # - Config propagation: copies learning rates, image settings, pointcloud sampling config into
+    # model.config
+    # >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
     if model_args.vision_tower is not None or model_args.pointcloud_tower is not None:
         model.get_model().initialize_vision_modules(
             model_args=model_args,
@@ -1315,7 +1384,13 @@ def train(attn_implementation=None):
         model.config.num_pc_tokens = model_args.num_pc_tokens
         model.config.pc_sampling_type = model_args.pc_sampling_type
         model.initialize_vision_tokenizer(model_args, tokenizer=tokenizer)
-    
+    # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+
+
+    # Section 9: Post-Quantization Dtype Fixes
+    # For quantized models, ensures LoRA layers match bf16/fp16, normalization layers stay fp32,
+    # and lm_head/embed_tokens are in the right dtype.
+    # >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
     if training_args.bits in [4, 8]:
         from peft.tuners.lora import LoraLayer
         for name, module in model.named_modules():
@@ -1328,7 +1403,15 @@ def train(attn_implementation=None):
                 if hasattr(module, 'weight'):
                     if training_args.bf16 and module.weight.dtype == torch.float32:
                         module = module.to(torch.bfloat16)
+    # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
     
+
+    # Section 10: Data Preparation
+    # - Propagates pc_use_link_token to data_args
+    # - Computes samples_per_epoch from batch size x world size x grad accumulation x
+    # steps_per_epoch (or sets to -1 for full dataset)
+    # - Calls make_supervised_data_module to build the training dataset and collator
+    # >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
     data_args.pc_use_link_token = model_args.pc_use_link_token
     if training_args.steps_per_epoch > 0:
         world_size = torch.cuda.device_count()
@@ -1341,7 +1424,16 @@ def train(attn_implementation=None):
     
     data_module = make_supervised_data_module(tokenizer=tokenizer,
                                               data_args=data_args)
+    # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
+
+    # Section 11: Pretrained Checkpoint Loading
+    # If pretrained_checkpoint is specified, loads:
+    #   1. LoRA weights from adapter_model.bin (with key renaming for PEFT format)
+    #   2. Non-LoRA trainable weights from non_lora_trainables.bin (excluding mm_projector)
+    #   3. Restores requires_grad flags for previously trainable params
+    # This enables multi-stage training (pretrain LoRA first, then continue).
+    # >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
     if training_args.pretrained_checkpoint:
         trainable_record = []
         for name, param in model.named_parameters():
@@ -1367,7 +1459,16 @@ def train(attn_implementation=None):
             if name in trainable_record:
                 param.to(training_args.device)
                 param.requires_grad = True
+    # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
+
+    # Section 12: Training Loop
+    # - Prints all trainable parameter names
+    # - Creates LLaVATrainer (a custom subclass of HuggingFace Trainer) with model, tokenizer,
+    #   args, and data
+    # - Resumes from checkpoint if one exists in the output dir, otherwise starts fresh
+    # - Runs trainer.train()
+    # >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
     for name, param in model.named_parameters():
         if param.requires_grad:
             rank0_print(name)
@@ -1380,6 +1481,17 @@ def train(attn_implementation=None):
         trainer.train(resume_from_checkpoint=True)
     else:
         trainer.train()
+    # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+
+
+    # Section 13: Saving
+    # - Saves trainer state and tokenizer
+    # - Re-enables KV cache for inference
+    # - LoRA path: saves LoRA adapter weights + non-LoRA trainable weights separately (using
+    #   DeepSpeed zero-3 compatible gather)
+    # - Full finetune path: calls safe_save_model_for_hf_trainer which saves either adapter-only
+    #   weights or the full model
+    # >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
     trainer.save_state()
     tokenizer.save_pretrained(training_args.output_dir)
 
@@ -1399,6 +1511,7 @@ def train(attn_implementation=None):
     else:
         safe_save_model_for_hf_trainer(trainer=trainer,
                                        output_dir=training_args.output_dir)
+    # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
 
 if __name__ == "__main__":
