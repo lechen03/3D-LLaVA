@@ -26,13 +26,9 @@ checkpoints
 ckpts*
 
 .ipynb_checkpoints
-*.ipynb
-
-*.pdf
 
 .claude/
 CLAUDE.md
-CODEBASE_MAP.md
 
 # DevContainer
 !.devcontainer/*
