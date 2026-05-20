@@ -35,12 +35,14 @@ from llava.constants import IGNORE_INDEX, IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN
 from llava.constants import DEFAULT_PC_TOKEN, DEFAULT_LINK_TOKEN, LINK_TOKEN_INDEX
 from torch.utils.data import Dataset
 from llava.train.llava_trainer import LLaVATrainer
+from transformers import TrainerCallback
 
 from llava import conversation as conversation_lib
 from llava.model import *
 from llava.mm_utils import tokenizer_image_token, tokenizer_special_token
-from llava.pc_utils import (Compose, 
-                            referseg_transform_train, 
+from llava.pc_utils import (Compose,
+                            referseg_transform_train,
+                            referseg_transform_train_with_click,
                             vqa_transform_train,
                             densecap_transform_train)
 
@@ -105,6 +107,7 @@ class DataArguments:
     scene_wise: bool = False
     scene_alignment_file: Optional[str] = field(default=None)
     extra_det_file: Optional[str] = field(default=None)
+    refer_seg_with_click: bool = False
 
 @dataclass
 class TrainingArguments(transformers.TrainingArguments):
@@ -136,6 +139,7 @@ class TrainingArguments(transformers.TrainingArguments):
     lora_r: int = 64
     lora_alpha: int = 16
     lora_dropout: float = 0.05
+    early_stopping_enabled: bool = False
     lora_weight_path: str = ""
     lora_bias: str = "none"
     mm_projector_lr: Optional[float] = None
@@ -747,6 +751,8 @@ class LazySupervisedDataset(Dataset):
 
     def _build_pc_transform(self):
         self.rs_transform = Compose(referseg_transform_train)
+        if self.data_args.refer_seg_with_click:
+            self.rs_transform = Compose(referseg_transform_train_with_click)
 
         if self.data_args.scene_alignment_file is not None:
             vqa_transform_train[0]['file_path'] = self.data_args.scene_alignment_file
@@ -1094,6 +1100,29 @@ def make_supervised_data_module(tokenizer: transformers.PreTrainedTokenizer,
                 data_collator=data_collator)
 
 
+class TrainingLossEarlyStopping(TrainerCallback):
+    def __init__(self, patience=3, threshold=0.001):
+        self.patience = patience
+        self.threshold = threshold
+        self.best_loss = float("inf")
+        self.wait = 0
+
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        if logs is None or "loss" not in logs:
+            return
+        loss = logs["loss"]
+        if loss < self.threshold:
+            control.should_training_stop = True
+            return
+        if loss < self.best_loss - 1e-6:
+            self.best_loss = loss
+            self.wait = 0
+        else:
+            self.wait += 1
+            if self.wait >= self.patience:
+                control.should_training_stop = True
+
+
 def train(attn_implementation=None):
     global local_rank
 
@@ -1375,6 +1404,7 @@ def train(attn_implementation=None):
     trainer = LLaVATrainer(model=model,
                     tokenizer=tokenizer,
                     args=training_args,
+                    callbacks=[TrainingLossEarlyStopping(patience=3, threshold=0.001)] if training_args.early_stopping_enabled else [],
                     **data_module)
     if list(pathlib.Path(training_args.output_dir).glob("checkpoint-*")):
         trainer.train(resume_from_checkpoint=True)

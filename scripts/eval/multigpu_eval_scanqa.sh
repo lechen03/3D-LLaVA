@@ -8,10 +8,12 @@ IFS=',' read -ra GPULIST <<< "$gpu_list"
 
 CHUNKS=${#GPULIST[@]}
 
+EXP_NAME=finetune-3d-llava-lora
+
 for IDX in $(seq 0 $((CHUNKS-1))); do
     CUDA_VISIBLE_DEVICES=${GPULIST[$IDX]} python -m llava.eval.model_scanqa \
         --scan-folder ./playground/data/scannet/val \
-        --model-path checkpoints/finetune-3d-llava-lora \
+        --model-path checkpoints/$EXP_NAME \
         --model-base liuhaotian/llava-v1.5-7b \
         --question-file ./playground/data/eval_info/scanqa/scanqa_val_question.jsonl \
         --answers-file ./playground/predictions/$EXP_NAME/scanqa/${CHUNKS}_${IDX}.jsonl \

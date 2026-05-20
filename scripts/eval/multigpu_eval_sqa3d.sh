@@ -13,7 +13,7 @@ EXP_NAME=finetune-3d-llava-lora
 for IDX in $(seq 0 $((CHUNKS-1))); do
     CUDA_VISIBLE_DEVICES=${GPULIST[$IDX]} python -m llava.eval.model_sqa3d \
         --scan-folder ./playground/data/scannet/val \
-        --model-path checkpoints/finetune-3d-llava-lora \
+        --model-path checkpoints/$EXP_NAME \
         --model-base liuhaotian/llava-v1.5-7b \
         --question-file ./playground/data/eval_info/sqa3d/sqa3d_test_question.json \
         --answers-file ./playground/predictions/$EXP_NAME/sqa3d/${CHUNKS}_${IDX}.jsonl \

@@ -716,6 +716,7 @@ class VisualSampler_SA_Only_Dist_Bias(ScanNetQueryDecoder_SA_Only):
                 offset = 0
             else:
                 cur_prompt_x = torch.mean(multilevel_x[0][batch_ind][cur_mask], dim=0, keepdim=True)
+                cur_prompt_x = torch.clamp(cur_prompt_x, -10, 10)
                 cur_prompt_xyz = torch.mean(cur_xyz[cur_mask], dim=0, keepdim=True)
                 prompt_count += 1
                 offset = 1
@@ -727,6 +728,7 @@ class VisualSampler_SA_Only_Dist_Bias(ScanNetQueryDecoder_SA_Only):
                 cur_x = self.self_attn_layers[i]([cur_x], [cur_xyz])
                 cur_prompt_x = cur_x[0][0:offset]
                 cur_prompt_x = self.ffn_layers[i]([cur_prompt_x])[0]
+                cur_prompt_x = torch.clamp(cur_prompt_x, -10, 10)
             prompt_x.append(cur_prompt_x)
         return prompt_x
 

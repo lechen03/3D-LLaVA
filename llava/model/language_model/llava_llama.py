@@ -287,13 +287,17 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
 
         else:
             out = self.forward_mask_decoder_train(
-                llm_out, 
-                mask_input_dict, 
-                seg_token_mask, 
-                gt_seg_labels, 
+                llm_out,
+                mask_input_dict,
+                seg_token_mask,
+                gt_seg_labels,
                 gt_seg_masks,
                 conditions
             )
+
+            # Replace NaN/Inf loss to prevent optimizer corruption
+            if torch.isnan(out.loss) or torch.isinf(out.loss):
+                out.loss = torch.zeros_like(out.loss, requires_grad=True)
 
             return out
 

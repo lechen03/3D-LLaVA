@@ -2376,21 +2376,22 @@ class AddReferTarget(object):
 
         if not isinstance(object_id,list):
             object_id = [object_id]
-        
+
         pt_segment = np.isin(instance, object_id)
         pt_segment = torch.tensor(pt_segment)
         p2s_map = torch.tensor(p2s_map)
-        
+
         sp_segment = scatter(
             pt_segment.float(), p2s_map.long(), reduce="mean", dim=-1
         )
-        
+
         gt_masks_3d = sp_segment > 0.5
         gt_labels_3d = torch.tensor([0])
 
         data_dict["gt_masks_3d"]  = gt_masks_3d.unsqueeze(0)
         data_dict["gt_labels_3d"] = gt_labels_3d.unsqueeze(0)
-        
+        data_dict["obj_sp_mask"]  = gt_masks_3d
+
         return data_dict
 
 
