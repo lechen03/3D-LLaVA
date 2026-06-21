@@ -9,13 +9,14 @@ that never connects. Here Open3D opens a normal native window instead.
 Usage:
     python hover_pointcloud_viewer.py <scene_path_or_id> [color_mode] [point_size] [--split train|val]
 
-    color_mode: rgb | semantic | instance   (default: rgb)
+    color_mode: rgb | semantic | instance | superpoint   (default: rgb)
     point_size: render point size in px       (default: 4.0)
     --split  : restrict a scene_id lookup to 'train' or 'val' (default: search both)
 
 Move the mouse over the cloud: the front-most point under the cursor has its
-coord / color / normal / semantic_gt20 / semantic_gt200 / instance_gt shown
-in the top-right corner of the window.
+coord / color / normal / semantic_gt20 / semantic_gt200 / instance_gt /
+superpoint shown in the top-right corner, and its whole superpoint is
+highlighted (drawn as a larger, brighter cluster on top of the cloud).
 """
 
 import colorsys
@@ -114,6 +115,20 @@ def _make_colors(scene, color_mode):
         for i, c in lut.items():
             colors[labels == i] = c
         return colors
+    if color_mode == "superpoint":
+        if "superpoint" not in scene:
+            raise ValueError("color_mode='superpoint' needs a super_points .bin; none was loaded")
+        sp = scene["superpoint"]
+        ids = np.unique(sp)
+        palette = _distinct_palette(len(ids))
+        # shuffle so neighboring superpoints (often consecutive ids) get
+        # different hues; otherwise adjacent patches share a near-identical color
+        palette = palette[np.random.RandomState(12345).permutation(len(ids))]
+        lut = dict(zip(ids.tolist(), palette))
+        colors = np.zeros((len(sp), 3))
+        for i, c in lut.items():
+            colors[sp == i] = c
+        return colors
     raise ValueError(f"unknown color_mode: {color_mode!r}")
 
 
@@ -131,9 +146,11 @@ class HoverPointCloudViewer:
     def __init__(self, title, pcd, scene_data, point_size):
         self.points = np.asarray(pcd.points, dtype=np.float64)  # as rendered (centered)
         self.data = scene_data                                  # original arrays, index-aligned
+        self.sp = scene_data.get("superpoint")                 # int64 (N,) or None
         self._cam_key = None
         self._screen_wh = None
         self._sx = self._sy = self._camz = None
+        self.highlighted_sp = None                             # currently highlighted superpoint id
 
         self.app = gui.Application.instance
         self.app.initialize()
@@ -145,10 +162,15 @@ class HoverPointCloudViewer:
         self.scene.scene = rendering.Open3DScene(self.win.renderer)
         self.scene.scene.set_background(  # black background
             np.asarray([0.0, 0.0, 0.0, 1.0], dtype=np.float32))
+        self.base_colors = np.asarray(pcd.colors, dtype=np.float64).copy()
         mat = rendering.MaterialRecord()
         mat.shader = "defaultUnlit"  # use per-point vertex colors
         mat.point_size = point_size
         self.scene.scene.add_geometry("points", pcd, mat)
+        # overlay material for the highlighted superpoint (larger points)
+        self.mat_overlay = rendering.MaterialRecord()
+        self.mat_overlay.shader = "defaultUnlit"
+        self.mat_overlay.point_size = point_size + 4.0
         self.scene.set_on_mouse(self._on_mouse)
         bounds = pcd.get_axis_aligned_bounding_box()
         self.scene.setup_camera(60.0, bounds, bounds.get_center())
@@ -163,8 +185,9 @@ class HoverPointCloudViewer:
         self.lbl_sem20 = gui.Label("")
         self.lbl_sem200 = gui.Label("")
         self.lbl_instance = gui.Label("")
+        self.lbl_superpoint = gui.Label("")
         for lbl in (self.hud_title, self.lbl_coord, self.lbl_color, self.lbl_normal,
-                    self.lbl_sem20, self.lbl_sem200, self.lbl_instance):
+                    self.lbl_sem20, self.lbl_sem200, self.lbl_instance, self.lbl_superpoint):
             lbl.text_color = hud_color
             self.panel.add_child(lbl)
 
@@ -218,11 +241,36 @@ class HoverPointCloudViewer:
         mask = d2 < self.PICK_RADIUS * self.PICK_RADIUS
         if mask.any():
             idxs = np.where(mask)[0]
-            pick = idxs[int(np.argmax(self._camz[idxs]))]  # front-most (closest to camera)
-            self._show_point(int(pick))
+            pick = int(idxs[int(np.argmax(self._camz[idxs]))])  # front-most (closest to camera)
+            self._show_point(pick)
+            if self.sp is not None:
+                self._set_highlight(int(self.sp[pick]))
         else:
             self._clear_hud()
+            self._set_highlight(None)
         self.win.post_redraw()
+
+    def _set_highlight(self, sp_id):
+        """Rebuild the highlighted-superpoint overlay, only when the SP id changes.
+
+        Open3D's Open3DScene has no in-place color update, so we use a separate
+        small overlay geometry (just the SP's points) that we remove+re-add.
+        Gated on sp_id change so sweeping within one SP costs nothing.
+        """
+        if sp_id == self.highlighted_sp:
+            return
+        self.highlighted_sp = sp_id
+        if self.scene.scene.has_geometry("highlight"):
+            self.scene.scene.remove_geometry("highlight")
+        if sp_id is None or self.sp is None:
+            return
+        m = self.sp == sp_id
+        if not m.any():
+            return
+        ov = o3d.geometry.PointCloud()
+        ov.points = o3d.utility.Vector3dVector(self.points[m])
+        ov.colors = o3d.utility.Vector3dVector(self.base_colors[m])
+        self.scene.scene.add_geometry("highlight", ov, self.mat_overlay)
 
     def _show_point(self, i):
         d = self.data
@@ -240,11 +288,16 @@ class HoverPointCloudViewer:
         self.lbl_sem20.text = f"sem20 : {s20:>3} ({name})"
         self.lbl_sem200.text = f"sem200: {s200}"
         self.lbl_instance.text = f"inst  : {inst}"
+        if self.sp is not None:
+            self.lbl_superpoint.text = f"super : {int(self.sp[i])}"
+        else:
+            self.lbl_superpoint.text = ""
 
     def _clear_hud(self):
         self.hud_title.text = "(no point under cursor)"
         for lbl in (self.lbl_coord, self.lbl_color, self.lbl_normal,
-                    self.lbl_sem20, self.lbl_sem200, self.lbl_instance):
+                    self.lbl_sem20, self.lbl_sem200, self.lbl_instance,
+                    self.lbl_superpoint):
             lbl.text = ""
 
     def run(self):
@@ -255,6 +308,22 @@ def run_viewer(pth_path, color_mode="rgb", point_size=4.0, center=True, split=No
     """Load a scene, build the colored cloud, and run the viewer (blocking)."""
     pth_path, split_used = _resolve_scene(pth_path, split)
     scene = load_scannet_scene(pth_path)
+
+    # load superpoint ids from the sibling super_points/<scene>.bin
+    scene_id = str(scene.get("scene_id", pth_path.stem))
+    sp_path = pth_path.parent.parent / "super_points" / f"{scene_id}.bin"
+    if sp_path.is_file():
+        sp = np.fromfile(sp_path, dtype=np.int64)
+        if len(sp) == len(scene["coord"]):
+            scene["superpoint"] = sp
+        else:
+            print(f"WARNING: superpoint length {len(sp)} != points "
+                  f"{len(scene['coord'])}; superpoint disabled")
+    elif color_mode == "superpoint":
+        raise FileNotFoundError(f"superpoint file not found: {sp_path}")
+    else:
+        print(f"note: no superpoint file at {sp_path} (hover-highlight disabled)")
+
     coord = scene["coord"]
     render_coord = coord - coord.mean(axis=0) if center else coord
 
