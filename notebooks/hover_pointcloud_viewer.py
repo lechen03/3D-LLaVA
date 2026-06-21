@@ -148,6 +148,7 @@ class HoverPointCloudViewer:
         self.data = scene_data                                  # original arrays, index-aligned
         self.sp = scene_data.get("superpoint")                 # int64 (N,) or None
         self.color_mode = color_mode                           # active color mode
+        self.highlight_enabled = False                         # hover superpoint highlight on/off
         self._cam_key = None
         self._screen_wh = None
         self._sx = self._sy = self._camz = None
@@ -205,9 +206,20 @@ class HoverPointCloudViewer:
         self.combo.selected_index = modes.index(color_mode) if color_mode in modes else 0
         self.combo.set_on_selection_changed(self._on_color_mode)
 
+        # ---- highlight toggle (below the color-mode selector) ----
+        self.toggle = gui.Horiz(4, gui.Margins(0, 0, 0, 0))
+        self.toggle_label = gui.Label("highlight superpoint")
+        self.toggle_label.text_color = gui.Color(1.0, 1.0, 1.0, 1.0)
+        self.toggle_check = gui.Checkbox("")
+        self.toggle_check.checked = False
+        self.toggle_check.set_on_checked(self._on_highlight_toggle)
+        self.toggle.add_child(self.toggle_label)
+        self.toggle.add_child(self.toggle_check)
+
         self.win.add_child(self.scene)
         self.win.add_child(self.panel)
         self.win.add_child(self.combo)
+        self.win.add_child(self.toggle)
         self.win.set_on_layout(self._on_layout)
 
     def _on_layout(self, ctx):
@@ -222,6 +234,11 @@ class HoverPointCloudViewer:
         cpref = self.combo.calc_preferred_size(ctx, gui.Widget.Constraints())
         self.combo.frame = gui.Rect(r.x + 8, r.y + 8,
                                     max(150, int(cpref.width)), int(cpref.height))
+        # anchor the highlight toggle just below the combobox
+        tpref = self.toggle.calc_preferred_size(ctx, gui.Widget.Constraints())
+        ty = r.y + 8 + int(cpref.height) + 6
+        self.toggle.frame = gui.Rect(r.x + 8, ty,
+                                     max(150, int(tpref.width)), int(tpref.height))
 
     def _on_color_mode(self, text, idx):
         """Recompute cloud colors when the user picks a new color mode."""
@@ -238,6 +255,15 @@ class HoverPointCloudViewer:
         self.highlighted_sp = None
         if self.scene.scene.has_geometry("highlight"):
             self.scene.scene.remove_geometry("highlight")
+        self.win.post_redraw()
+
+    def _on_highlight_toggle(self, is_checked):
+        """Enable/disable the hover superpoint highlight overlay."""
+        self.highlight_enabled = bool(is_checked)
+        if not self.highlight_enabled:
+            self.highlighted_sp = None
+            if self.scene.scene.has_geometry("highlight"):
+                self.scene.scene.remove_geometry("highlight")
         self.win.post_redraw()
 
     # ---- mouse -> point picking ----
@@ -279,8 +305,10 @@ class HoverPointCloudViewer:
             idxs = np.where(mask)[0]
             pick = int(idxs[int(np.argmax(self._camz[idxs]))])  # front-most (closest to camera)
             self._show_point(pick)
-            if self.sp is not None:
+            if self.sp is not None and self.highlight_enabled:
                 self._set_highlight(int(self.sp[pick]))
+            else:
+                self._set_highlight(None)
         else:
             self._clear_hud()
             self._set_highlight(None)
