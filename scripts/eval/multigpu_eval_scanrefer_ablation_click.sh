@@ -11,12 +11,12 @@ CHUNKS=${#GPULIST[@]}
 EXP_NAME=finetune-3d-llava-lora
 
 for IDX in $(seq 0 $((CHUNKS-1))); do
-    CUDA_VISIBLE_DEVICES=${GPULIST[$IDX]} python -m llava.eval.model_multi3drefer \
+    CUDA_VISIBLE_DEVICES=${GPULIST[$IDX]} python -m llava.eval.model_scanrefer_with_click \
         --scan-folder ./playground/data/scannet/val \
-        --model-path checkpoints/$EXP_NAME \
+        --model-path checkpoints/finetune-3d-llava-lora \
         --model-base liuhaotian/llava-v1.5-7b \
-        --question-file ./playground/data/eval_info/multi3drefer/multi3drefer_val.json \
-        --answers-file ./playground/predictions/$EXP_NAME/multi3drefer/${CHUNKS}_${IDX}.jsonl \
+        --question-file ./playground/data/eval_info/referseg_scanrefer/ScanRefer_filtered_val.json \
+        --answers-file ./playground/predictions/$EXP_NAME/referseg_scanrefer_ablation_click/${CHUNKS}_${IDX}.jsonl \
         --num-chunks $CHUNKS \
         --chunk-idx $IDX \
         --temperature 0 \
@@ -25,14 +25,14 @@ done
 
 wait
 
-output_file=./playground/predictions/$EXP_NAME/multi3drefer/merge.jsonl
+output_file=./playground/predictions/$EXP_NAME/referseg_scanrefer_ablation_click/merge.jsonl
 
 # Clear out the output file if it exists.
 > "$output_file"
 
 # Loop through the indices and concatenate each file.
 for IDX in $(seq 0 $((CHUNKS-1))); do
-    cat ./playground/predictions/$EXP_NAME/multi3drefer/${CHUNKS}_${IDX}.jsonl >> "$output_file"
+    cat ./playground/predictions/$EXP_NAME/referseg_scanrefer_ablation_click/${CHUNKS}_${IDX}.jsonl >> "$output_file"
 done
 
 python llava/eval/eval_refer_seg.py \

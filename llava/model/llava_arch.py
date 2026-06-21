@@ -244,7 +244,7 @@ class LlavaMetaForCausalLM(ABC):
 
         pointcloud_tokens = [self.get_model().mm_projector(feat) for feat in sampled_features]
         prompt_tokens = [self.get_model().mm_projector(feat) for feat in prompt_features]
-    
+
         return pointcloud_tokens, prompt_tokens, superpoint_features, mask_input_dict
 
     def encode_click_prompt(self, prompt):

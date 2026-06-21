@@ -108,7 +108,7 @@ def calc_sqa3d_score(preds, gts):
         #     pred = pred[0].lower() + pred[1:]
         pred_answer = clean_answer(pred_answer)
         gt_answers = [clean_answer(gt_answer)]
-        print('pred_answer:', pred_answer, 'gt_answers:', gt_answers[0])
+        # print('pred_answer:', pred_answer, 'gt_answers:', gt_answers[0])
         em_flag, em_refined_flag = answer_match(pred_answer, gt_answers)
         em_overall += em_flag
         em_refined_overall += em_refined_flag

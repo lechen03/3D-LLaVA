@@ -8,10 +8,10 @@ IFS=',' read -ra GPULIST <<< "$gpu_list"
 
 CHUNKS=${#GPULIST[@]}
 
-EXP_NAME=finetune-3d-llava-lora
+EXP_NAME=finetune-3d-llava-lora-with-click
 
 for IDX in $(seq 0 $((CHUNKS-1))); do
-    CUDA_VISIBLE_DEVICES=${GPULIST[$IDX]} python -m llava.eval.model_multi3drefer \
+    CUDA_VISIBLE_DEVICES=${GPULIST[$IDX]} python -m llava.eval.model_multi3drefer_with_click \
         --scan-folder ./playground/data/scannet/val \
         --model-path checkpoints/$EXP_NAME \
         --model-base liuhaotian/llava-v1.5-7b \
