@@ -143,10 +143,11 @@ class HoverPointCloudViewer:
     HUD_WIDTH = 330
     PICK_RADIUS = 12.0  # screen pixels
 
-    def __init__(self, title, pcd, scene_data, point_size):
+    def __init__(self, title, pcd, scene_data, point_size, color_mode="rgb"):
         self.points = np.asarray(pcd.points, dtype=np.float64)  # as rendered (centered)
         self.data = scene_data                                  # original arrays, index-aligned
         self.sp = scene_data.get("superpoint")                 # int64 (N,) or None
+        self.color_mode = color_mode                           # active color mode
         self._cam_key = None
         self._screen_wh = None
         self._sx = self._sy = self._camz = None
@@ -155,9 +156,10 @@ class HoverPointCloudViewer:
         self.app = gui.Application.instance
         self.app.initialize()
         self.win = self.app.create_window(title, 1600, 900)
-        self._build(pcd, point_size)
+        self._build(pcd, point_size, color_mode)
 
-    def _build(self, pcd, point_size):
+    def _build(self, pcd, point_size, color_mode):
+        self.pcd = pcd
         self.scene = gui.SceneWidget()
         self.scene.scene = rendering.Open3DScene(self.win.renderer)
         self.scene.scene.set_background(  # black background
@@ -166,6 +168,7 @@ class HoverPointCloudViewer:
         mat = rendering.MaterialRecord()
         mat.shader = "defaultUnlit"  # use per-point vertex colors
         mat.point_size = point_size
+        self.mat = mat
         self.scene.scene.add_geometry("points", pcd, mat)
         # overlay material for the highlighted superpoint (larger points)
         self.mat_overlay = rendering.MaterialRecord()
@@ -191,8 +194,20 @@ class HoverPointCloudViewer:
             lbl.text_color = hud_color
             self.panel.add_child(lbl)
 
+        # ---- top-left color-mode selector ----
+        modes = ["rgb", "semantic", "instance"]
+        if self.sp is not None:
+            modes.append("superpoint")
+        self.modes = modes
+        self.combo = gui.Combobox()
+        for m in modes:
+            self.combo.add_item(m)
+        self.combo.selected_index = modes.index(color_mode) if color_mode in modes else 0
+        self.combo.set_on_selection_changed(self._on_color_mode)
+
         self.win.add_child(self.scene)
         self.win.add_child(self.panel)
+        self.win.add_child(self.combo)
         self.win.set_on_layout(self._on_layout)
 
     def _on_layout(self, ctx):
@@ -201,8 +216,29 @@ class HoverPointCloudViewer:
         pref = self.panel.calc_preferred_size(ctx, gui.Widget.Constraints())
         w = min(self.HUD_WIDTH, r.width // 2)
         h = min(int(pref.height), r.height)
-        # anchor to the top-right corner with an 8 px margin
+        # anchor the HUD to the top-right corner with an 8 px margin
         self.panel.frame = gui.Rect(r.x + r.width - w - 8, r.y + 8, w, h)
+        # anchor the color-mode combobox to the top-left corner
+        cpref = self.combo.calc_preferred_size(ctx, gui.Widget.Constraints())
+        self.combo.frame = gui.Rect(r.x + 8, r.y + 8,
+                                    max(150, int(cpref.width)), int(cpref.height))
+
+    def _on_color_mode(self, text, idx):
+        """Recompute cloud colors when the user picks a new color mode."""
+        if text == self.color_mode or text not in self.modes:
+            return
+        self.color_mode = text
+        colors = _make_colors(self.data, text)
+        self.base_colors = colors
+        if self.scene.scene.has_geometry("points"):
+            self.scene.scene.remove_geometry("points")
+        self.pcd.colors = o3d.utility.Vector3dVector(colors)
+        self.scene.scene.add_geometry("points", self.pcd, self.mat)
+        # clear the highlight overlay; it rebuilds on next hover with new colors
+        self.highlighted_sp = None
+        if self.scene.scene.has_geometry("highlight"):
+            self.scene.scene.remove_geometry("highlight")
+        self.win.post_redraw()
 
     # ---- mouse -> point picking ----
     def _on_mouse(self, event):
@@ -334,7 +370,7 @@ def run_viewer(pth_path, color_mode="rgb", point_size=4.0, center=True, split=No
     title = str(scene.get("scene_id", pth_path.stem))
     split_str = f" | split={split_used}" if split_used else ""
     print(f"{title}: {len(render_coord)} points | color_mode={color_mode}{split_str}")
-    HoverPointCloudViewer(title, pcd, scene, point_size).run()
+    HoverPointCloudViewer(title, pcd, scene, point_size, color_mode=color_mode).run()
 
 
 def main(argv):
