@@ -102,6 +102,10 @@ def eval_model(args):
     os.makedirs(os.path.dirname(answers_file), exist_ok=True)
     ans_file = open(answers_file, "w")
 
+    # directory for per-question pred/gt mask .npz files (for visualization)
+    mask_folder = pathlib.Path(args.mask_folder) if args.mask_folder else pathlib.Path(answers_file).resolve().parent / "masks"
+    mask_folder.mkdir(parents=True, exist_ok=True)
+
     record = dict()
     for idx, source in enumerate(tqdm(questions)):
         if "scene_id" in source:
@@ -218,6 +222,13 @@ def eval_model(args):
         else:
             tp50 = 0    
 
+        # save per-point pred/gt masks for visualization (see notebooks/hover_pointcloud_viewer.py)
+        np.savez_compressed(
+            mask_folder / f"{scan_file}__q{idx:04d}.npz",
+            pred_mask=pred_mask, gt_mask=gt_mask, iou=np.float32(iou),
+            scene_id=str(scan_file), question_id=np.int64(idx),
+        )
+
         ans_file.write(json.dumps({"question_id": idx,
                                    "prompt": qs,
                                    "model_id": model_name,
@@ -238,6 +249,9 @@ if __name__ == "__main__":
     parser.add_argument("--scan-folder", type=str, default="")
     parser.add_argument("--question-file", type=str, default="tables/question.jsonl")
     parser.add_argument("--answers-file", type=str, default="answer.jsonl")
+    parser.add_argument("--mask-folder", type=str, default="",
+                        help="dir for per-question pred/gt mask .npz files; "
+                             "default: <answers-file dir>/masks")
     parser.add_argument("--conv-mode", type=str, default="llava_v1")
     parser.add_argument("--num-chunks", type=int, default=1)
     parser.add_argument("--chunk-idx", type=int, default=0)

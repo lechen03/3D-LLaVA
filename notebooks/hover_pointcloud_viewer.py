@@ -7,16 +7,24 @@ handshake mode", which otherwise blocks forever waiting for a browser client
 that never connects. Here Open3D opens a normal native window instead.
 
 Usage:
-    python hover_pointcloud_viewer.py <scene_path_or_id> [color_mode] [point_size] [--split train|val]
+    python hover_pointcloud_viewer.py <scene_path_or_id> [color_mode] [point_size] [--split train|val] [--mask masks/<scene>__q0000.npz]
 
-    color_mode: rgb | semantic | instance | superpoint   (default: rgb)
+    color_mode: rgb | semantic | instance | superpoint | tpfpfn | pred | gt   (default: rgb; tpfpfn when --mask given)
     point_size: render point size in px       (default: 4.0)
     --split  : restrict a scene_id lookup to 'train' or 'val' (default: search both)
+    --mask   : path to a per-question mask .npz (pred_mask, gt_mask) saved by the
+               refer-seg eval scripts. Adds the tpfpfn/pred/gt color modes and a
+               per-point seg (TP/FP/FN/TN) line in the HUD.
 
 Move the mouse over the cloud: the front-most point under the cursor has its
 coord / color / normal / semantic_gt20 / semantic_gt200 / instance_gt /
 superpoint shown in the top-right corner, and its whole superpoint is
 highlighted (drawn as a larger, brighter cluster on top of the cloud).
+
+With --mask, color modes show refer-seg results:
+    tpfpfn -> green=TP (pred∩gt), red=FP (false pos), blue=FN (false neg), gray=rest
+    pred   -> orange where the model predicted the object
+    gt     -> teal-green where the ground truth object is
 """
 
 import colorsys
@@ -129,7 +137,38 @@ def _make_colors(scene, color_mode):
         for i, c in lut.items():
             colors[sp == i] = c
         return colors
+    if color_mode in ("tpfpfn", "pred", "gt"):
+        return _seg_colors(scene, color_mode)
     raise ValueError(f"unknown color_mode: {color_mode!r}")
+
+
+def _seg_colors(scene, color_mode):
+    """Color points by refer-seg correctness against pred_mask / gt_mask.
+
+    tpfpfn: green=TP (pred∩gt), red=FP (false positive), blue=FN (false negative),
+            dark gray=the rest (true negatives).
+    pred:   orange where the model predicted the object; rest dark gray.
+    gt:     teal-green where the ground-truth object is; rest dark gray.
+    """
+    pred = scene.get("pred_mask")
+    gt = scene.get("gt_mask")
+    if pred is None or gt is None:
+        raise ValueError(f"color_mode={color_mode!r} needs pred_mask/gt_mask; none loaded")
+    n = len(scene["coord"])
+    colors = np.full((n, 3), 0.12, dtype=np.float64)
+    if color_mode == "pred":
+        colors[pred] = [1.0, 0.65, 0.1]
+        return colors
+    if color_mode == "gt":
+        colors[gt] = [0.1, 0.9, 0.4]
+        return colors
+    tp = pred & gt
+    fp = pred & (~gt)
+    fn = (~pred) & gt
+    colors[tp] = [0.0, 0.9, 0.0]
+    colors[fp] = [0.95, 0.1, 0.1]
+    colors[fn] = [0.1, 0.4, 1.0]
+    return colors
 
 
 class HoverPointCloudViewer:
@@ -190,8 +229,10 @@ class HoverPointCloudViewer:
         self.lbl_sem200 = gui.Label("")
         self.lbl_instance = gui.Label("")
         self.lbl_superpoint = gui.Label("")
+        self.lbl_seg = gui.Label("")
         for lbl in (self.hud_title, self.lbl_coord, self.lbl_color, self.lbl_normal,
-                    self.lbl_sem20, self.lbl_sem200, self.lbl_instance, self.lbl_superpoint):
+                    self.lbl_sem20, self.lbl_sem200, self.lbl_instance, self.lbl_superpoint,
+                    self.lbl_seg):
             lbl.text_color = hud_color
             self.panel.add_child(lbl)
 
@@ -199,6 +240,8 @@ class HoverPointCloudViewer:
         modes = ["rgb", "semantic", "instance"]
         if self.sp is not None:
             modes.append("superpoint")
+        if self.data.get("pred_mask") is not None:
+            modes.extend(["tpfpfn", "pred", "gt"])
         self.modes = modes
         self.combo = gui.Combobox()
         for m in modes:
@@ -356,19 +399,26 @@ class HoverPointCloudViewer:
             self.lbl_superpoint.text = f"super : {int(self.sp[i])}"
         else:
             self.lbl_superpoint.text = ""
+        if "pred_mask" in d and "gt_mask" in d:
+            p = bool(d["pred_mask"][i])
+            g = bool(d["gt_mask"][i])
+            cat = "TP" if (p and g) else ("FP" if p else ("FN" if g else "TN"))
+            self.lbl_seg.text = f"seg   : {cat}"
+        else:
+            self.lbl_seg.text = ""
 
     def _clear_hud(self):
         self.hud_title.text = "(no point under cursor)"
         for lbl in (self.lbl_coord, self.lbl_color, self.lbl_normal,
                     self.lbl_sem20, self.lbl_sem200, self.lbl_instance,
-                    self.lbl_superpoint):
+                    self.lbl_superpoint, self.lbl_seg):
             lbl.text = ""
 
     def run(self):
         self.app.run()
 
 
-def run_viewer(pth_path, color_mode="rgb", point_size=4.0, center=True, split=None):
+def run_viewer(pth_path, color_mode="rgb", point_size=4.0, center=True, split=None, mask_path=None):
     """Load a scene, build the colored cloud, and run the viewer (blocking)."""
     pth_path, split_used = _resolve_scene(pth_path, split)
     scene = load_scannet_scene(pth_path)
@@ -388,6 +438,20 @@ def run_viewer(pth_path, color_mode="rgb", point_size=4.0, center=True, split=No
     else:
         print(f"note: no superpoint file at {sp_path} (hover-highlight disabled)")
 
+    if mask_path is not None:
+        md = np.load(mask_path)
+        pm = np.asarray(md["pred_mask"]).astype(bool)
+        gm = np.asarray(md["gt_mask"]).astype(bool)
+        if len(pm) == len(scene["coord"]) and len(gm) == len(scene["coord"]):
+            scene["pred_mask"] = pm
+            scene["gt_mask"] = gm
+            if color_mode == "rgb":  # default to the error-map when a mask is supplied
+                color_mode = "tpfpfn"
+            print(f"loaded mask {pathlib.Path(mask_path).name}: iou={float(md['iou']):.3f}")
+        else:
+            print(f"WARNING: mask length {len(pm)}/{len(gm)} != points "
+                  f"{len(scene['coord'])}; seg overlay disabled")
+
     coord = scene["coord"]
     render_coord = coord - coord.mean(axis=0) if center else coord
 
@@ -404,10 +468,16 @@ def run_viewer(pth_path, color_mode="rgb", point_size=4.0, center=True, split=No
 def main(argv):
     args = list(argv[1:])
     split = None
-    if "--split" in args:  # optional: --split train|val
-        i = args.index("--split")
-        args.pop(i)
-        split = args.pop(i) if i < len(args) else None
+    mask = None
+    for flag in ("--split", "--mask"):  # optional: --split train|val | --mask path.npz
+        if flag in args:
+            i = args.index(flag)
+            args.pop(i)
+            val = args.pop(i) if i < len(args) else None
+            if flag == "--split":
+                split = val
+            else:
+                mask = val
     if len(args) < 1:
         print(__doc__)
         sys.exit(1)
@@ -415,7 +485,8 @@ def main(argv):
     color_mode = args[1] if len(args) > 1 else "rgb"
     point_size = float(args[2]) if len(args) > 2 else 4.0
     center = (args[3].lower() not in ("0", "false", "no")) if len(args) > 3 else True
-    run_viewer(scene, color_mode=color_mode, point_size=point_size, center=center, split=split)
+    run_viewer(scene, color_mode=color_mode, point_size=point_size, center=center,
+               split=split, mask_path=mask)
 
 
 if __name__ == "__main__":
