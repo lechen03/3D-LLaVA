@@ -7,7 +7,7 @@ handshake mode", which otherwise blocks forever waiting for a browser client
 that never connects. Here Open3D opens a normal native window instead.
 
 Usage:
-    python hover_pointcloud_viewer.py <scene_path_or_id> [color_mode] [point_size] [--split train|val] [--mask masks/<scene>__q0000.npz]
+    python hover_pointcloud_viewer.py <scene_path_or_id> [color_mode] [point_size] [--split train|val] [--mask masks/<scene>__c0_q0000.npz]
 
     color_mode: rgb | semantic | instance | superpoint | tpfpfn | pred | gt   (default: rgb; tpfpfn when --mask given)
     point_size: render point size in px       (default: 4.0)

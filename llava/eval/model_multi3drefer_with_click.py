@@ -228,7 +228,7 @@ def eval_model(args):
 
         # save per-point pred/gt masks for visualization (see notebooks/hover_pointcloud_viewer.py)
         np.savez_compressed(
-            mask_folder / f"{scan_file}__q{idx:04d}.npz",
+            mask_folder / f"{scan_file}__c{args.chunk_idx}_q{idx:04d}.npz",
             pred_mask=pred_mask, gt_mask=gt_mask, iou=np.float32(iou),
             scene_id=str(scan_file), question_id=np.int64(idx),
         )
