@@ -2396,6 +2396,33 @@ class AddReferTarget(object):
 
 
 @TRANSFORMS.register_module()
+class AddGroundingTarget(object):
+    """Grounding target for the [LOC] coordinate-regression task.
+
+    Computes the object's 3D center (gt_loc) from the post-augmentation coord
+    frame -- the same frame the model sees -- so the predicted center and the
+    eval-time superpoint centroids (sp_xyz) live in the same space. Runs after
+    ToTensor (like Mask2Box), so coord is a tensor.
+    """
+    def __call__(self, data_dict):
+        instance = np.asarray(data_dict["instance"])
+        object_id = data_dict["object_id"]
+        coord = torch.as_tensor(data_dict["coord"])
+
+        if not isinstance(object_id, list):
+            object_id = [object_id]
+
+        pt_segment = np.isin(instance, object_id)
+        pt_segment = torch.as_tensor(pt_segment)
+        if pt_segment.any():
+            center = coord[pt_segment].mean(dim=0)
+        else:
+            center = coord.mean(dim=0)
+        data_dict["gt_loc"] = center.float()
+        return data_dict
+
+
+@TRANSFORMS.register_module()
 class Refer2InstanceMask(object):
     def __call__(self, data_dict):
         instance  = data_dict["instance"]

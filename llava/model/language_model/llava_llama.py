@@ -17,6 +17,7 @@ from typing import List, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from torch.nn import CrossEntropyLoss
 
@@ -91,6 +92,53 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
             gt_labels=gt_seg_labels,
         )
         llm_out["loss"] += seg_loss
+
+        return llm_out
+
+    def forward_loc_head_train(
+            self,
+            llm_out,
+            loc_token_mask,
+            gt_loc,
+            loc_loss_weight=1.0,
+            ):
+        # Regress a 3D object center from the hidden state at each [LOC] token,
+        # reusing the shared hidden_seg_fc (4096->256) projector and a loc-specific
+        # loc_head (256->3) with an L1 loss against gt_loc.
+        #
+        # loc_head / hidden_seg_fc are ALWAYS invoked (even when a sample has no
+        # [LOC] token) so these params participate in the graph on every batch.
+        # DDP/DeepSpeed gradient sync requires an identical trainable-param
+        # subgraph across ranks; batches are task-pure and different ranks may hold
+        # different tasks at the same step, so skipping loc_head on non-grounding
+        # batches would deadlock all-reduce. The keepalive term (a zero-magnitude
+        # sum) keeps the params in the graph without affecting the loss; the real
+        # L1 is added only when a [LOC] token and a gt_loc target are present.
+        last_llm_hidden_states = llm_out.hidden_states[-1]
+        batch_size = last_llm_hidden_states.shape[0]
+
+        loc_loss = None
+        n_loc = 0
+        keepalive = last_llm_hidden_states.new_zeros(())
+        hidden_seg_fc = self.get_hidden_seg_fc()
+        loc_head = self.get_loc_head()
+        for batch_ind in range(batch_size):
+            cur_hidden_embeds = last_llm_hidden_states[batch_ind]
+            cur_loc_token_mask = loc_token_mask[batch_ind]
+            cur_loc_hidden_state = cur_hidden_embeds[cur_loc_token_mask]   # (n_loc, 4096), may be empty
+            cur_loc_embed = hidden_seg_fc(cur_loc_hidden_state)            # always run -> graph node
+            cur_loc_pred = loc_head(cur_loc_embed)                         # always run -> loc_head in graph
+            keepalive = keepalive + cur_loc_pred.sum() * 0.0
+            if cur_loc_pred.shape[0] > 0 and gt_loc is not None and batch_ind < gt_loc.shape[0]:
+                cur_gt = gt_loc[batch_ind].to(cur_loc_pred).unsqueeze(0)   # (1, 3)
+                cur_loss = F.l1_loss(cur_loc_pred, cur_gt)
+                loc_loss = cur_loss if loc_loss is None else loc_loss + cur_loss
+                n_loc += 1
+
+        if loc_loss is not None:
+            llm_out["loss"] = llm_out["loss"] + loc_loss_weight * (loc_loss / max(n_loc, 1) + keepalive)
+        else:
+            llm_out["loss"] = llm_out["loss"] + loc_loss_weight * keepalive
 
         return llm_out
 
@@ -238,6 +286,7 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
         gt_seg_labels: Optional[List] = None,
         superpoint_mask: Optional[List] = None,
         click_mask: Optional[List] = None,
+        gt_loc: Optional[torch.FloatTensor] = None,
         **kwargs
     ) -> Union[Tuple, CausalLMOutputWithPast]:
 
@@ -250,7 +299,8 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
                 inputs_embeds,
                 labels,
                 seg_token_mask,
-                mask_input_dict
+                mask_input_dict,
+                loc_token_mask
             ) = self.prepare_inputs_labels_for_multimodal(
                 input_ids,
                 position_ids,
@@ -286,6 +336,15 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
             return llm_out
 
         else:
+            # Always run BOTH heads on every batch so the trainable-param subgraph
+            # is identical across DDP ranks. Batches are task-pure and different
+            # ranks may hold different tasks at the same step; branching per task
+            # (grounding->loc_head only, seg->mask_decoder only) makes ranks
+            # compute on disjoint subgraphs and deadlocks gradient all-reduce.
+            # Each head adds ~0 loss when its token is absent. (The original code
+            # already always ran forward_mask_decoder_train on every task for this
+            # exact reason; forward_loc_head_train mirrors it with a graph
+            # keepalive so loc_head is also exercised on non-grounding batches.)
             out = self.forward_mask_decoder_train(
                 llm_out,
                 mask_input_dict,
@@ -293,6 +352,12 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
                 gt_seg_labels,
                 gt_seg_masks,
                 conditions
+            )
+            out = self.forward_loc_head_train(
+                out,
+                loc_token_mask,
+                gt_loc,
+                getattr(self.config, "loc_loss_weight", 1.0)
             )
 
             # Replace NaN/Inf loss to prevent optimizer corruption
@@ -334,7 +399,8 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
                 inputs_embeds,
                 _,
                 _,
-                mask_input_dict
+                mask_input_dict,
+                _
             ) = self.prepare_inputs_labels_for_multimodal(
                 inputs,
                 position_ids,
@@ -367,6 +433,22 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
         conditions = kwargs.pop("conditions")
         if conditions[0] in ["vqa", "captioning", "textgen"]:
             return output_ids
+
+        # grounding: regress the object center at the [LOC] token (mirrors the
+        # [SEG] gather below, but applies loc_head and returns a (3,) center).
+        if conditions[0] == "grounding":
+            loc_token_idx = getattr(self.config, "loc_token_idx", None)
+            assert loc_token_idx is not None, "config.loc_token_idx is not set"
+            loc_mask = output_ids[0, 1:] == loc_token_idx
+            loc_indices = torch.nonzero(loc_mask, as_tuple=True)[0]
+            if len(loc_indices) == 0:
+                return torch.zeros(3, device=coord.device)
+            loc_hidden_states = [output_hidden_states[i] for i in loc_indices]
+            last_loc_hidden_states = [h[-1] for h in loc_hidden_states]
+            last_loc_hidden_states = torch.cat(last_loc_hidden_states, dim=1)
+            loc_embed = self.get_hidden_seg_fc()(last_loc_hidden_states)
+            pred_loc = self.get_loc_head()(loc_embed)
+            return pred_loc[0, 0]
 
         assert output_ids.shape[0] == 1, "only support batch_size=1"
         seg_token_mask = output_ids[0, 1:] == self.config.seg_token_idx

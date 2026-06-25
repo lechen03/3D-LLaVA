@@ -1,5 +1,6 @@
 from .default import (referseg_transform_train,
                       referseg_transform_train_with_click,
+                      grounding_transform_train,
                       vqa_transform_train,
                       densecap_transform_train,
                       referseg_transform_eval,

@@ -75,6 +75,11 @@ class LlavaMetaModel:
         hidden_seg_fc = pointcloud_tower.hidden_seg_fc
         return hidden_seg_fc
 
+    def get_loc_head(self):
+        pointcloud_tower = self.get_pointcloud_tower()
+        loc_head = pointcloud_tower.loc_head
+        return loc_head
+
     def get_seg_criteria(self):
         pointcloud_tower = self.get_pointcloud_tower()
         seg_criteria = pointcloud_tower.seg_criteria
@@ -227,6 +232,9 @@ class LlavaMetaForCausalLM(ABC):
     def get_hidden_seg_fc(self):
         return self.get_model().get_hidden_seg_fc()
 
+    def get_loc_head(self):
+        return self.get_model().get_loc_head()
+
     def get_seg_criteria(self):
         return self.get_model().get_seg_criteria()
     
@@ -267,7 +275,7 @@ class LlavaMetaForCausalLM(ABC):
     ):  
         pointcloud_tower = self.get_pointcloud_tower()
         if pointcloud_tower is None or pc_input is None or input_ids.shape[1] == 1:
-            return input_ids, position_ids, attention_mask, past_key_values, None, labels, None, None
+            return input_ids, position_ids, attention_mask, past_key_values, None, labels, None, None, None
         
         pc_tokens, prompt_tokens, superpoint_features, mask_input_dict = self.encode_pointclouds(
              coord, grid_coord, offset, pc_input, p2v_map, v2p_map, spatial_shape, superpoint_mask, click_mask
@@ -281,6 +289,20 @@ class LlavaMetaForCausalLM(ABC):
             [
                 seg_token_mask,
                 torch.zeros((seg_token_mask.shape[0], 1)).bool().cuda(),
+            ],
+            dim=1,
+        )
+
+        # parallel mask for the [LOC] coordinate-regression target token (mirrors seg_token_mask)
+        loc_token_idx = getattr(self.config, 'loc_token_idx', None)
+        if loc_token_idx is None:
+            loc_token_mask = torch.zeros_like(input_ids[:, 1:], dtype=torch.bool)
+        else:
+            loc_token_mask = input_ids[:, 1:] == loc_token_idx
+        loc_token_mask = torch.cat(
+            [
+                loc_token_mask,
+                torch.zeros((loc_token_mask.shape[0], 1)).bool().cuda(),
             ],
             dim=1,
         )
@@ -305,10 +327,12 @@ class LlavaMetaForCausalLM(ABC):
         input_ids = [cur_input_ids[cur_attention_mask] for cur_input_ids, cur_attention_mask in zip(input_ids, attention_mask)]
         labels = [cur_labels[cur_attention_mask] for cur_labels, cur_attention_mask in zip(labels, attention_mask)]
         seg_token_mask = [cur_seg_mask[cur_attention_mask] for cur_seg_mask, cur_attention_mask in zip(seg_token_mask, attention_mask)]
+        loc_token_mask = [cur_loc_mask[cur_attention_mask] for cur_loc_mask, cur_attention_mask in zip(loc_token_mask, attention_mask)]
 
         new_input_embeds = []
         new_labels = []
         new_seg_token_mask = []
+        new_loc_token_mask = []
         # Use "image" to represent "3d scene" in the following code, following the practice of LLaVA
         # Remember that in the current implementation, the <pc> also uses IMAGE_TOKEN_INDEX
         # May by modified in the future version
@@ -339,10 +363,13 @@ class LlavaMetaForCausalLM(ABC):
             cur_labels_noim = []
             cur_seg_token_mask = seg_token_mask[batch_idx]
             cur_seg_token_mask_noim = []
+            cur_loc_token_mask = loc_token_mask[batch_idx]
+            cur_loc_token_mask_noim = []
             for i in range(len(special_token_indices) - 1):
                 cur_input_ids_noim.append(cur_input_ids[special_token_indices[i]+1:special_token_indices[i+1]])
                 cur_labels_noim.append(cur_labels[special_token_indices[i]+1:special_token_indices[i+1]])
                 cur_seg_token_mask_noim.append(cur_seg_token_mask[special_token_indices[i]+1:special_token_indices[i+1]])
+                cur_loc_token_mask_noim.append(cur_loc_token_mask[special_token_indices[i]+1:special_token_indices[i+1]])
 
             split_sizes = [x.shape[0] for x in cur_labels_noim]
             cur_input_embeds = self.get_model().embed_tokens(torch.cat(cur_input_ids_noim))
@@ -350,10 +377,12 @@ class LlavaMetaForCausalLM(ABC):
             cur_new_input_embeds = []
             cur_new_labels = []
             cur_new_seg_token_mask = []
+            cur_new_loc_token_mask = []
             for i in range(num_specials + 1):
                 cur_new_input_embeds.append(cur_input_embeds_no_im[i])
                 cur_new_labels.append(cur_labels_noim[i])
                 cur_new_seg_token_mask.append(cur_seg_token_mask_noim[i])
+                cur_new_loc_token_mask.append(cur_loc_token_mask_noim[i])
                 if i < num_specials:
                     cur_token = special_tokens[i]
                     if cur_token == IMAGE_TOKEN_INDEX:
@@ -362,6 +391,7 @@ class LlavaMetaForCausalLM(ABC):
                         cur_new_input_embeds.append(cur_pc_features)
                         cur_new_labels.append(torch.full((cur_pc_features.shape[0],), IGNORE_INDEX, device=cur_labels.device, dtype=cur_labels.dtype))
                         cur_new_seg_token_mask.append(torch.full((cur_pc_features.shape[0],), False, device=cur_seg_token_mask.device, dtype=cur_seg_token_mask.dtype))
+                        cur_new_loc_token_mask.append(torch.full((cur_pc_features.shape[0],), False, device=cur_seg_token_mask.device, dtype=cur_seg_token_mask.dtype))
                     elif cur_token == LOC_TOKEN_INDEX:
                         cur_prompt_features = prompt_tokens[cur_prompt_idx]
                         if len(cur_prompt_features.shape) == 1:
@@ -370,12 +400,14 @@ class LlavaMetaForCausalLM(ABC):
                         cur_new_input_embeds.append(cur_prompt_features)
                         cur_new_labels.append(torch.full((cur_prompt_features.shape[0],), IGNORE_INDEX, device=cur_labels.device, dtype=cur_labels.dtype))
                         cur_new_seg_token_mask.append(torch.full((cur_prompt_features.shape[0],), False, device=cur_seg_token_mask.device, dtype=cur_seg_token_mask.dtype))
+                        cur_new_loc_token_mask.append(torch.full((cur_prompt_features.shape[0],), False, device=cur_seg_token_mask.device, dtype=cur_seg_token_mask.dtype))
 
 
             cur_new_input_embeds = [x.to(self.device) for x in cur_new_input_embeds]
             cur_new_input_embeds = torch.cat(cur_new_input_embeds)
             cur_new_labels = torch.cat(cur_new_labels)
             cur_new_seg_token_mask = torch.cat(cur_new_seg_token_mask)
+            cur_new_loc_token_mask = torch.cat(cur_new_loc_token_mask)
 
             if num_prompts == 0:
                 cur_new_input_embeds = torch.cat([cur_new_input_embeds, prompt_tokens[0:0]], dim=0)
@@ -383,6 +415,7 @@ class LlavaMetaForCausalLM(ABC):
             new_input_embeds.append(cur_new_input_embeds)
             new_labels.append(cur_new_labels)
             new_seg_token_mask.append(cur_new_seg_token_mask)
+            new_loc_token_mask.append(cur_new_loc_token_mask)
 
         # Truncate sequences to max length as image embeddings can make the sequence longer
         tokenizer_model_max_length = getattr(self.config, 'tokenizer_model_max_length', None)
@@ -390,6 +423,7 @@ class LlavaMetaForCausalLM(ABC):
             new_input_embeds = [x[:tokenizer_model_max_length] for x in new_input_embeds]
             new_labels = [x[:tokenizer_model_max_length] for x in new_labels]
             new_seg_token_mask = [x[:tokenizer_model_max_length] for x in new_seg_token_mask]
+            new_loc_token_mask = [x[:tokenizer_model_max_length] for x in new_loc_token_mask]
 
         # Combine them
         max_len = max(x.shape[0] for x in new_input_embeds)
@@ -400,9 +434,10 @@ class LlavaMetaForCausalLM(ABC):
         attention_mask = torch.zeros((batch_size, max_len), dtype=attention_mask.dtype, device=attention_mask.device)
         position_ids = torch.zeros((batch_size, max_len), dtype=position_ids.dtype, device=position_ids.device)
         seg_token_mask_padded = torch.full((batch_size, max_len), False, dtype=new_seg_token_mask[0].dtype, device=new_seg_token_mask[0].device)
+        loc_token_mask_padded = torch.full((batch_size, max_len), False, dtype=new_loc_token_mask[0].dtype, device=new_loc_token_mask[0].device)
 
-        for i, (cur_new_embed, cur_new_labels, cur_new_seg_token_mask) in \
-                    enumerate(zip(new_input_embeds, new_labels, new_seg_token_mask)):
+        for i, (cur_new_embed, cur_new_labels, cur_new_seg_token_mask, cur_new_loc_token_mask) in \
+                    enumerate(zip(new_input_embeds, new_labels, new_seg_token_mask, new_loc_token_mask)):
             cur_len = cur_new_embed.shape[0]
             if getattr(self.config, 'tokenizer_padding_side', 'right') == "left":
                 new_input_embeds_padded.append(torch.cat((
@@ -414,6 +449,7 @@ class LlavaMetaForCausalLM(ABC):
                     attention_mask[i, -cur_len:] = True
                     position_ids[i, -cur_len:] = torch.arange(0, cur_len, dtype=position_ids.dtype, device=position_ids.device)
                     seg_token_mask_padded[i, -cur_len:] = cur_new_seg_token_mask
+                    loc_token_mask_padded[i, -cur_len:] = cur_new_loc_token_mask
             else:
                 new_input_embeds_padded.append(torch.cat((
                     cur_new_embed,
@@ -424,6 +460,7 @@ class LlavaMetaForCausalLM(ABC):
                     attention_mask[i, :cur_len] = True
                     position_ids[i, :cur_len] = torch.arange(0, cur_len, dtype=position_ids.dtype, device=position_ids.device)
                     seg_token_mask_padded[i, :cur_len] = cur_new_seg_token_mask
+                    loc_token_mask_padded[i, :cur_len] = cur_new_loc_token_mask
 
         new_input_embeds = torch.stack(new_input_embeds_padded, dim=0)
 
@@ -440,7 +477,7 @@ class LlavaMetaForCausalLM(ABC):
         if _position_ids is None:
             position_ids = None
 
-        return None, position_ids, attention_mask, past_key_values, new_input_embeds, new_labels, seg_token_mask_padded, mask_input_dict
+        return None, position_ids, attention_mask, past_key_values, new_input_embeds, new_labels, seg_token_mask_padded, mask_input_dict, loc_token_mask_padded
 
     def initialize_vision_tokenizer(self, model_args, tokenizer):
         if model_args.mm_use_im_patch_token:

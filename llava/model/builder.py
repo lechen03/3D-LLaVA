@@ -56,9 +56,13 @@ def load_pretrained_model(model_path, model_base, model_name, pointcloud_tower_n
             import copy
             lora_cfg_original_vocab_size = copy.deepcopy(lora_cfg_pretrained)
             if 'checkpoints' in model_path.lower():
+                # Initialize the base model at the original LLaMA vocab (32000),
+                # then resize up to the full LoRA vocab below. The base LLaMA vocab
+                # is fixed at 32000; the LoRA checkpoint may have added any number of
+                # special tokens (e.g. [SEG], [LOC]), so do not assume a fixed offset.
                 print("using vocab size 32000 to initialize model", flush=True)
-                lora_cfg_original_vocab_size.vocab_size = lora_cfg_pretrained.vocab_size - 1 # 32001-1 = 32000
-                assert lora_cfg_original_vocab_size.vocab_size == 32000
+                lora_cfg_original_vocab_size.vocab_size = 32000
+                assert lora_cfg_pretrained.vocab_size >= 32000
 
             if os.path.exists(os.path.join(model_path, 'tokenizer.model')):
                 tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=False)

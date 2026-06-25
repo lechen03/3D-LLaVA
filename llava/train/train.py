@@ -43,6 +43,7 @@ from llava.mm_utils import tokenizer_image_token, tokenizer_special_token
 from llava.pc_utils import (Compose,
                             referseg_transform_train,
                             referseg_transform_train_with_click,
+                            grounding_transform_train,
                             vqa_transform_train,
                             densecap_transform_train)
 
@@ -109,6 +110,8 @@ class DataArguments:
     scene_alignment_file: Optional[str] = field(default=None)
     extra_det_file: Optional[str] = field(default=None)
     refer_seg_with_click: bool = False
+    grounding: bool = False
+    loc_loss_weight: float = 1.0
 
 @dataclass
 class TrainingArguments(transformers.TrainingArguments):
@@ -755,6 +758,9 @@ class LazySupervisedDataset(Dataset):
         if self.data_args.refer_seg_with_click:
             self.rs_transform = Compose(referseg_transform_train_with_click)
 
+        if self.data_args.grounding:
+            self.grounding_transform = Compose(grounding_transform_train)
+
         if self.data_args.scene_alignment_file is not None:
             vqa_transform_train[0]['file_path'] = self.data_args.scene_alignment_file
             densecap_transform_train[0]['file_path'] = self.data_args.scene_alignment_file
@@ -799,6 +805,7 @@ class LazySupervisedDataset(Dataset):
             "vqa": 0,
             "dense_captioning": 1,
             "refer_seg": 2,
+            "grounding": 3,
         }
         length_list = []
         for sample in self.list_data_dict:
@@ -900,6 +907,8 @@ class LazySupervisedDataset(Dataset):
                 transform = self.vqa_transform
             elif task_type == 'dense_captioning':
                 transform = self.densecap_transform
+            elif task_type == 'grounding':
+                transform = self.grounding_transform
 
             pc_data_dict = dict(
                 scene_id=scene_name,
@@ -1051,6 +1060,7 @@ class DataCollatorForSupervisedDataset(object):
             superpoint_mask_list = []
             click_list = []
             click_mask_list = []
+            loc_list = []
             for d in instances:
                 scene_id_list.append(d["scene_id"])
                 condition_list.append(d["condition"])
@@ -1068,11 +1078,20 @@ class DataCollatorForSupervisedDataset(object):
                     click_mask_list.append(d['obj_sp_mask'])
                 else:
                     click_mask_list.append([])
+                if 'gt_loc' in d:
+                    loc_list.append(d['gt_loc'])
+                else:
+                    # Placeholder keeps gt_loc aligned with batch_ind even in
+                    # mixed-task batches (non-grounding samples have no gt_loc).
+                    # Their zeros row is never used: those samples have no [LOC]
+                    # token, so forward_loc_head_train skips them.
+                    loc_list.append(torch.zeros(3, dtype=torch.float))
                 superpoint_mask_list.append(d["superpoint_mask"])
             if len(click_list) > 0:
                 click_tensor = torch.stack(click_list)
             else:
                 click_tensor = None
+            loc_tensor = torch.stack(loc_list)
             batch.update({
                 "grid_coord": voxel_coords,
                 "p2v_map": p2v_map,
@@ -1081,10 +1100,11 @@ class DataCollatorForSupervisedDataset(object):
                 "conditions": condition_list,
                 "gt_seg_masks": gt_mask_list,
                 "gt_seg_labels": gt_label_list,
-                "superpoint_mask": superpoint_mask_list,  
+                "superpoint_mask": superpoint_mask_list,
                 "scene_id": scene_id_list,
                 "click": click_tensor,
-                "click_mask": click_mask_list
+                "click_mask": click_mask_list,
+                "gt_loc": loc_tensor,
             })
         return batch
 
@@ -1348,14 +1368,26 @@ def train(attn_implementation=None):
         model.config.tokenizer_model_max_length = tokenizer.model_max_length
 
         # add special tokens to tokenizer
+        added_new_token = False
         if "[SEG]" not in tokenizer.get_vocab():
             tokenizer.add_special_tokens({'additional_special_tokens': ["[SEG]"]})
+            added_new_token = True
+        if "[LOC]" not in tokenizer.get_vocab():
+            tokenizer.add_special_tokens({'additional_special_tokens': ["[LOC]"]})
+            added_new_token = True
+        if added_new_token:
             model.resize_token_embeddings(len(tokenizer))
-            
+
         seg_token_idx = tokenizer.convert_tokens_to_ids("[SEG]")
         # model.lm_head.weight[seg_token_idx] = 0.0
         model_args.seg_token_idx = seg_token_idx
         model.config.seg_token_idx = model_args.seg_token_idx
+        # [LOC] is the coordinate-regression target token for the grounding task;
+        # distinct from the <loc> click sentinel (LOC_TOKEN_INDEX = -400).
+        loc_token_idx = tokenizer.convert_tokens_to_ids("[LOC]")
+        model_args.loc_token_idx = loc_token_idx
+        model.config.loc_token_idx = loc_token_idx
+        model.config.loc_loss_weight = getattr(data_args, "loc_loss_weight", 1.0)
         model.config.link_token_indices = -1000000
 
         # enable gradient bp for token_embeds and lm_head

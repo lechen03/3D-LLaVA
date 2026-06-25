@@ -88,6 +88,15 @@ class SPConvPointCloudTower(nn.Module):
         for param in self.hidden_seg_fc.parameters():
             param.requires_grad = True
 
+        # regression head for [LOC] tokens: predict a object 3D center from the
+        # shared 256-d task embedding produced by hidden_seg_fc (4096->256).
+        # Reuses hidden_seg_fc as the shared LLM->task projector; this final
+        # 256->3 layer is loc-specific.
+        self.loc_head = nn.Linear(256, 3)
+        self.loc_head.train()
+        for param in self.loc_head.parameters():
+            param.requires_grad = True
+
         # segmentation criterion
         self.seg_criteria = build_criteria(cfg.criteria)
 
