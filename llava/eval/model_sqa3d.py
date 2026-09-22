@@ -89,6 +89,8 @@ def eval_model(args):
     questions = [json.loads(q) for q in open(os.path.expanduser(args.question_file), "r")]
     questions = get_chunk(questions, args.num_chunks, args.chunk_idx)
 
+    od_map = json.load(open(args.od_file)) if args.od_file else {}
+
     answers_file = os.path.expanduser(args.answers_file)
     os.makedirs(os.path.dirname(answers_file), exist_ok=True)
     ans_file = open(answers_file, "w")
@@ -132,6 +134,13 @@ def eval_model(args):
 
         qs = source['text']
         qs = template[0].format(question=qs)
+        od_text = od_map.get(scan_file, "").strip()
+        if od_text:
+            qs = qs.replace(
+                DEFAULT_IMAGE_TOKEN + "\n",
+                DEFAULT_IMAGE_TOKEN + "\n<od>\n" + od_text + "\n</od>\n",
+                1,
+            )
 
         conv = conv_templates[args.conv_mode].copy()
         conv.append_message(conv.roles[0], qs)
@@ -149,8 +158,11 @@ def eval_model(args):
         superpoint_mask = [torch.tensor(superpoint_mask).to(device)]
         
         # move input tensors to gpu, defaut type is supposed to be bfloat16
-        with torch.inference_mode():
-            output_ids = model.generate(
+        _oom_tries = 0
+        while True:
+          try:
+            with torch.inference_mode():
+                output_ids = model.generate(
                 input_ids,
                 # images=image_tensor.unsqueeze(0).half().cuda(),
                 # image_sizes=[image.size],
@@ -167,13 +179,19 @@ def eval_model(args):
                 do_sample=False,
                 temperature=1.0,
                 top_p=args.top_p,
-                num_beams=5,
+                num_beams=5 if _oom_tries < 2 else 1,
                 # no_repeat_ngram_size=3,
                 min_length=1,
                 max_new_tokens=64,
                 tokenizer=tokenizer,
                 click_mask=[[]],
                 use_cache=True)
+            break
+          except torch.cuda.OutOfMemoryError:
+            torch.cuda.empty_cache()
+            _oom_tries += 1
+            if _oom_tries >= 3:
+                raise
 
         outputs = tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0].strip()
         ans_id = shortuuid.uuid()
@@ -185,6 +203,7 @@ def eval_model(args):
                                    "model_id": model_name,
                                    "metadata": {}}) + "\n")
         ans_file.flush()
+        torch.cuda.empty_cache()  # prevent fragmentation buildup across questions
     ans_file.close()
 
 
@@ -200,6 +219,8 @@ if __name__ == "__main__":
     parser.add_argument("--num-chunks", type=int, default=1)
     parser.add_argument("--chunk-idx", type=int, default=0)
     parser.add_argument("--temperature", type=float, default=0.2)
+    parser.add_argument("--od-file", type=str, default=None,
+                        help="json {scene_id: od_text}; injects <od>...</od> after the image token")
     parser.add_argument("--top_p", type=float, default=None)
     parser.add_argument("--num_beams", type=int, default=1)
     args = parser.parse_args()
