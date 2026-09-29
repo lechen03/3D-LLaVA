@@ -48,6 +48,7 @@ OUT_DIR = REPO / "playground/predictions/spatial_split"
 RUNS = {
     "baseline": REPO / "playground/predictions/finetune-3d-llava-lora",
     "with_od": REPO / "playground/predictions/finetune-3d-llava-lora-with-od",
+    "with_od_topk": REPO / "playground/predictions/finetune-3d-llava-lora-with-od-topk",
 }
 
 EVAL_INFO = REPO / "playground/data/eval_info"
@@ -105,8 +106,24 @@ FULLCHECK_REF = {
         "[scan2cap] CIDEr@0.25": 0.8124614688242546,
         "[scan2cap] CIDEr@0.50": 0.7627650756902353,
     },
+    ("sqa3d", "with_od_topk"): {
+        "[sqa3d] EM1": 0.5436203466894004,
+        "[sqa3d] EM1_refined": 0.5697641375390736,
+    },
+    ("scanqa", "with_od_topk"): {
+        "[scanqa] EM1": 0.26074866310160427,
+        "[scanqa] EM1_refined": 0.4203208556149733,
+        "[scanqa] Bleu_1": 0.4541804631937976,
+        "[scanqa] CIDEr": 0.9315763994118087,
+    },
+    ("scan2cap", "with_od_topk"): {
+        "[scan2cap] CIDEr@0.25": 0.8171484689686274,
+        "[scan2cap] CIDEr@0.50": 0.7657199093761884,
+    },
     # referseg numbers were only recorded at 4 decimals -> compare rounded
     ("referseg_scanrefer", "with_od"): (0.4094, 0.5898, 0.3944),
+    ("referseg_scanrefer", "with_od_topk"): (0.4149, 0.5996, 0.4015),
+    ("multi3drefer", "with_od_topk"): (0.4709, 0.6549, 0.4607),
     ("referseg_scanrefer", "baseline"): (0.4110, 0.5971, 0.3943),
     ("multi3drefer", "with_od"): (0.4690, 0.6489, 0.4576),
     ("multi3drefer", "baseline"): (0.4679, 0.6569, 0.4530),

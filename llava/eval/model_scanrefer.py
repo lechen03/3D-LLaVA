@@ -1,6 +1,7 @@
 import argparse
 import torch
 import os
+import sys
 import json
 from tqdm import tqdm
 import shortuuid
@@ -92,6 +93,12 @@ def eval_model(args):
         
     questions = get_chunk(questions, args.num_chunks, args.chunk_idx)
     od_map = json.load(open(args.od_file)) if args.od_file else {}
+    retriever = None
+    if args.od_file and args.od_topk:  # EXP-OD2: per-question class retrieval
+        _repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        sys.path.insert(0, os.path.join(_repo, "scripts"))
+        from od_retrieval import OdRetriever
+        retriever = OdRetriever()
     answers_file = os.path.expanduser(args.answers_file)
     os.makedirs(os.path.dirname(answers_file), exist_ok=True)
     ans_file = open(answers_file, "w")
@@ -143,6 +150,8 @@ def eval_model(args):
         qs = source['description']
         qs = templates[0].format(description=qs)
         od_text = od_map.get(scan_file, "").strip()
+        if od_text and retriever is not None:
+            od_text = retriever.select_od_text(od_text, source['description'], args.od_topk)
         if od_text:
             qs = qs.replace(
                 "<image>\n",
@@ -254,6 +263,8 @@ if __name__ == "__main__":
     parser.add_argument("--temperature", type=float, default=0.2)
     parser.add_argument("--od-file", type=str, default=None,
                         help="json {scene_id: od_text}; injects <od>...</od> after the image token")
+    parser.add_argument("--od-topk", type=int, default=None,
+                        help="with --od-file: per-question top-C class retrieval (scripts/od_retrieval.py)")
     parser.add_argument("--top_p", type=float, default=None)
     parser.add_argument("--num_beams", type=int, default=1)
     parser.add_argument("--data_version", type=str, default="v0")

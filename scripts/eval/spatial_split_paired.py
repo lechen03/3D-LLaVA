@@ -23,6 +23,7 @@ from eval_scanqa import clean_answer, answer_match  # noqa: E402
 RUNS = {
     "baseline": REPO / "playground/predictions/finetune-3d-llava-lora",
     "with_od": REPO / "playground/predictions/finetune-3d-llava-lora-with-od",
+    "with_od_topk": REPO / "playground/predictions/finetune-3d-llava-lora-with-od-topk",
 }
 EVAL_INFO = REPO / "playground/data/eval_info"
 
@@ -71,20 +72,22 @@ def analyze(task, ann_file, run_task_dir):
         assert len(preds) == len(ann)
         run_em[run] = em1_flags(preds, ann)
 
-    print(f"\n===== {task} EM1 paired (baseline vs with_od) =====")
-    print(f"{'bucket':12s} {'n':>5s} {'base':>7s} {'od':>7s} {'delta':>7s} "
-          f"{'b(od+base-)':>12s} {'c(od-base+)':>12s} {'p_exact':>9s}")
-    for bucket, want in [("spatial", True), ("nonspatial", False), ("full", None)]:
-        idx = [i for i in range(len(ann)) if want is None or flags[i] == want]
-        base = [run_em["baseline"][i] for i in idx]
-        od = [run_em["with_od"][i] for i in idx]
-        acc_b = sum(base) / len(idx)
-        acc_o = sum(od) / len(idx)
-        b = sum(1 for x, y in zip(od, base) if x and not y)
-        c = sum(1 for x, y in zip(od, base) if y and not x)
-        p = mcnemar_exact_p(b, c)
-        print(f"{bucket:12s} {len(idx):5d} {acc_b:7.4f} {acc_o:7.4f} "
-              f"{(acc_o - acc_b) * 100:+7.2f} {b:12d} {c:12d} {p:9.4f}")
+    for run_a, run_b in [("baseline", "with_od"), ("baseline", "with_od_topk"),
+                          ("with_od", "with_od_topk")]:
+        print(f"\n===== {task} EM1 paired ({run_a} vs {run_b}) =====")
+        print(f"{'bucket':12s} {'n':>5s} {'base':>7s} {'od':>7s} {'delta':>7s} "
+              f"{'b(od+base-)':>12s} {'c(od-base+)':>12s} {'p_exact':>9s}")
+        for bucket, want in [("spatial", True), ("nonspatial", False), ("full", None)]:
+            idx = [i for i in range(len(ann)) if want is None or flags[i] == want]
+            base = [run_em[run_a][i] for i in idx]
+            od = [run_em[run_b][i] for i in idx]
+            acc_b = sum(base) / len(idx)
+            acc_o = sum(od) / len(idx)
+            b = sum(1 for x, y in zip(od, base) if x and not y)
+            c = sum(1 for x, y in zip(od, base) if y and not x)
+            p = mcnemar_exact_p(b, c)
+            print(f"{bucket:12s} {len(idx):5d} {acc_b:7.4f} {acc_o:7.4f} "
+                  f"{(acc_o - acc_b) * 100:+7.2f} {b:12d} {c:12d} {p:9.4f}")
 
 
 if __name__ == "__main__":
