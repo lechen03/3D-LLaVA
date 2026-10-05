@@ -101,3 +101,5 @@ bash scripts/eval/multigpu_eval_all_with_od.sh
 *已完成后续分析：[空间关系问题分桶](OD_INJECTION_SPATIAL_SPLIT.md)（2026-09-28）——scanqa EM1 全量增益 +0.92pt 配对显著（McNemar p=0.037），但**全部来自非空间关系问题**（+1.58pt, p=0.010；空间题 +0.26pt, p=0.73）→ OD 先验是存在性/类别 grounding，不是空间关系推理。*
 
 *已完成后续实验：[EXP-OD2 选择性注入](OD_INJECTION_TOPK_REPORT.md)（2026-09-29）——RAG 类级 top-3 检索注入（OD 文本 ÷3.4、训练 −15%）：13 项主指标 10 项三列最佳，**EM↑/CIDEr↓ trade-off 消除**，ref-seg/caption 首次全面超基线；增益分布与全量版互补（topk 偏空间题、全量偏非空间题）。*
+
+*已完成后续实验：[EXP-OD3 仅类名版](OD_INJECTION_NAMES_REPORT.md)（2026-09-29）——坐标消融：OD 块只留去重类名（token p50 1129→64、训练 14.4h→6.7h）。**VQA 上与全量版配对平手（p=0.81）且 sqa3d 四模型最强、CIDEr 最高——坐标是死重、物体清单即全部有效成分**；ref-seg 跌回基线下（有效成分是 topk 的「选择」）；caption 略降（几何对 dense caption 有值）。*
