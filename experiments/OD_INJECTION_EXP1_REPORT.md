@@ -103,3 +103,5 @@ bash scripts/eval/multigpu_eval_all_with_od.sh
 *已完成后续实验：[EXP-OD2 选择性注入](OD_INJECTION_TOPK_REPORT.md)（2026-09-29）——RAG 类级 top-3 检索注入（OD 文本 ÷3.4、训练 −15%）：13 项主指标 10 项三列最佳，**EM↑/CIDEr↓ trade-off 消除**，ref-seg/caption 首次全面超基线；增益分布与全量版互补（topk 偏空间题、全量偏非空间题）。*
 
 *已完成后续实验：[EXP-OD3 仅类名版](OD_INJECTION_NAMES_REPORT.md)（2026-09-29）——坐标消融：OD 块只留去重类名（token p50 1129→64、训练 14.4h→6.7h）。**VQA 上与全量版配对平手（p=0.81）且 sqa3d 四模型最强、CIDEr 最高——坐标是死重、物体清单即全部有效成分**；ref-seg 跌回基线下（有效成分是 topk 的「选择」）；caption 略降（几何对 dense caption 有值）。*
+
+*已完成后续实验：[EXP-OD4 显式空间关系版](OD_INJECTION_REL_REPORT.md)（2026-10-07）——纯几何推断的观察者视角成对关系文本化：**H1 拒绝**（空间题未抬升，scanqa 空间桶 +0.64 n.s.、sqa3d 反跌 −0.6）、**冗长关系文本有毒**（CIDEr −5.6pt、caption/ref-seg 全线最低、sqa3d 跌破基线）；唯一亮点 scanqa EM1/EM1_refined 双最高但伴随严重风格极化。**系列终局：OD 先验价值上限 = 物体清单 + 检索选择，任何更丰富的几何/关系文本化均零或负贡献。***
