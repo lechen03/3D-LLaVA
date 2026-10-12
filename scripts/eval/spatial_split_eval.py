@@ -51,6 +51,7 @@ RUNS = {
     "with_od_topk": REPO / "playground/predictions/finetune-3d-llava-lora-with-od-topk",
     "with_od_names": REPO / "playground/predictions/finetune-3d-llava-lora-with-od-names",
     "with_od_rel": REPO / "playground/predictions/finetune-3d-llava-lora-with-od-rel",
+    "with_od_gt": REPO / "playground/predictions/finetune-3d-llava-lora-with-od-gt",
 }
 
 EVAL_INFO = REPO / "playground/data/eval_info"
@@ -158,6 +159,22 @@ FULLCHECK_REF = {
     },
     ("referseg_scanrefer", "with_od_rel"): (0.4020, 0.5835, 0.3754),
     ("multi3drefer", "with_od_rel"): (0.4646, 0.6469, 0.4460),
+    ("sqa3d", "with_od_gt"): {
+        "[sqa3d] EM1": 0.5478829212844558,
+        "[sqa3d] EM1_refined": 0.578005115089514,
+    },
+    ("scanqa", "with_od_gt"): {
+        "[scanqa] EM1": 0.26438502673796793,
+        "[scanqa] EM1_refined": 0.42566844919786095,
+        "[scanqa] Bleu_1": 0.4446602612033515,
+        "[scanqa] CIDEr": 0.9177909816898588,
+    },
+    ("scan2cap", "with_od_gt"): {
+        "[scan2cap] CIDEr@0.25": 0.8130994246687723,
+        "[scan2cap] CIDEr@0.50": 0.7633114592637694,
+    },
+    ("referseg_scanrefer", "with_od_gt"): (0.4102, 0.5910, 0.3925),
+    ("multi3drefer", "with_od_gt"): (0.4698, 0.6564, 0.4591),
     ("referseg_scanrefer", "baseline"): (0.4110, 0.5971, 0.3943),
     ("multi3drefer", "with_od"): (0.4690, 0.6489, 0.4576),
     ("multi3drefer", "baseline"): (0.4679, 0.6569, 0.4530),

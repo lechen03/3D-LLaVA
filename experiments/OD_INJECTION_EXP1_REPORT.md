@@ -105,3 +105,5 @@ bash scripts/eval/multigpu_eval_all_with_od.sh
 *已完成后续实验：[EXP-OD3 仅类名版](OD_INJECTION_NAMES_REPORT.md)（2026-09-29）——坐标消融：OD 块只留去重类名（token p50 1129→64、训练 14.4h→6.7h）。**VQA 上与全量版配对平手（p=0.81）且 sqa3d 四模型最强、CIDEr 最高——坐标是死重、物体清单即全部有效成分**；ref-seg 跌回基线下（有效成分是 topk 的「选择」）；caption 略降（几何对 dense caption 有值）。*
 
 *已完成后续实验：[EXP-OD4 显式空间关系版](OD_INJECTION_REL_REPORT.md)（2026-10-07）——纯几何推断的观察者视角成对关系文本化：**H1 拒绝**（空间题未抬升，scanqa 空间桶 +0.64 n.s.、sqa3d 反跌 −0.6）、**冗长关系文本有毒**（CIDEr −5.6pt、caption/ref-seg 全线最低、sqa3d 跌破基线）；唯一亮点 scanqa EM1/EM1_refined 双最高但伴随严重风格极化。**系列终局：OD 先验价值上限 = 物体清单 + 检索选择，任何更丰富的几何/关系文本化均零或负贡献。***
+
+*已完成后续实验：[EXP-OD5 Ground-Truth bbox 版](OD_INJECTION_GT_REPORT.md)（2026-10-12）——判别消融定论：GT 与预测框在 scanqa EM1 完美配对平手（+0.04, p=0.96）→ **检测器精度不是瓶颈、框级信息难以被 LLM 利用**；GT 的系列最高 VQA 数字（sqa3d 54.79）即清单效应天花板。系列六变体收官：价值 = names 清单 + topk 选择，改进检测器对此范式无回报。*

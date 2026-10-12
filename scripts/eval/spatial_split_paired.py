@@ -26,6 +26,7 @@ RUNS = {
     "with_od_topk": REPO / "playground/predictions/finetune-3d-llava-lora-with-od-topk",
     "with_od_names": REPO / "playground/predictions/finetune-3d-llava-lora-with-od-names",
     "with_od_rel": REPO / "playground/predictions/finetune-3d-llava-lora-with-od-rel",
+    "with_od_gt": REPO / "playground/predictions/finetune-3d-llava-lora-with-od-gt",
 }
 EVAL_INFO = REPO / "playground/data/eval_info"
 
@@ -77,7 +78,8 @@ def analyze(task, ann_file, run_task_dir):
     for run_a, run_b in [("baseline", "with_od"), ("baseline", "with_od_topk"),
                           ("baseline", "with_od_names"), ("with_od", "with_od_names"),
                           ("with_od_topk", "with_od_names"), ("baseline", "with_od_rel"),
-                          ("with_od", "with_od_rel")]:
+                          ("with_od", "with_od_rel"), ("baseline", "with_od_gt"),
+                          ("with_od", "with_od_gt")]:
         print(f"\n===== {task} EM1 paired ({run_a} vs {run_b}) =====")
         print(f"{'bucket':12s} {'n':>5s} {'base':>7s} {'od':>7s} {'delta':>7s} "
               f"{'b(od+base-)':>12s} {'c(od-base+)':>12s} {'p_exact':>9s}")
