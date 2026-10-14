@@ -107,3 +107,5 @@ bash scripts/eval/multigpu_eval_all_with_od.sh
 *已完成后续实验：[EXP-OD4 显式空间关系版](OD_INJECTION_REL_REPORT.md)（2026-10-07）——纯几何推断的观察者视角成对关系文本化：**H1 拒绝**（空间题未抬升，scanqa 空间桶 +0.64 n.s.、sqa3d 反跌 −0.6）、**冗长关系文本有毒**（CIDEr −5.6pt、caption/ref-seg 全线最低、sqa3d 跌破基线）；唯一亮点 scanqa EM1/EM1_refined 双最高但伴随严重风格极化。**系列终局：OD 先验价值上限 = 物体清单 + 检索选择，任何更丰富的几何/关系文本化均零或负贡献。***
 
 *已完成后续实验：[EXP-OD5 Ground-Truth bbox 版](OD_INJECTION_GT_REPORT.md)（2026-10-12）——判别消融定论：GT 与预测框在 scanqa EM1 完美配对平手（+0.04, p=0.96）→ **检测器精度不是瓶颈、框级信息难以被 LLM 利用**；GT 的系列最高 VQA 数字（sqa3d 54.79）即清单效应天花板。系列六变体收官：价值 = names 清单 + topk 选择，改进检测器对此范式无回报。*
+
+*已完成后续实验：[EXP-OD6 去点云版](OD_INJECTION_NOPC_REPORT.md)（2026-10-14）——反向消融（OD5 去掉点云，仅 GT bbox 文本 + 问题，代码级 `--no-pc`）：**sqa3d 与完整多模态 baseline 配对平手（−0.40, p=0.61）——GT 框列表 + 语言先验可打平整个 3D 编码器**；scanqa −2~3 EM 显著、CIDEr −9.6。掉点类型化集中：非空间/颜色外观题（RGB 只在点云里）与 What 识别/Can-see 可见性题崩、How-many 计数题保住 OD 注入全部增益（+5.4 vs baseline，框列表可数）。ref-seg/scan2cap 无点云即任务不成立。*

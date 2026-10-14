@@ -106,50 +106,59 @@ def eval_model(args):
     for source in tqdm(questions):
         idx = source['question_id']
         scan_file   = source['scene_id']
-        scan_folder = args.scan_folder
-        scan_data_path  = pathlib.Path(scan_folder) / f'{scan_file}.pth'
-        superpoint_path = pathlib.Path(scan_folder) / '../super_points' / f'{scan_file}.bin'
 
-        raw_data = torch.load(scan_data_path)
-        coord = raw_data['coord']
-        color = raw_data['color']
-        superpoint_mask = np.fromfile(superpoint_path, dtype=np.int64)
+        pc_data_dict = voxel_coords = p2v_map = v2p_map = superpoint_mask = spatial_shape = None
+        if not args.no_pc:  # EXP-OD6: --no-pc skips the point cloud entirely
+            scan_folder = args.scan_folder
+            scan_data_path  = pathlib.Path(scan_folder) / f'{scan_file}.pth'
+            superpoint_path = pathlib.Path(scan_folder) / '../super_points' / f'{scan_file}.bin'
 
-        # data transformation
-        transform = Compose(vqa_transform_eval)
-        pc_data_dict = dict(
-            scene_id=scan_file,
-            coord=coord,
-            color=color,
-            superpoint_mask=superpoint_mask
-        )
-        pc_data_dict = transform(pc_data_dict)
+            raw_data = torch.load(scan_data_path)
+            coord = raw_data['coord']
+            color = raw_data['color']
+            superpoint_mask = np.fromfile(superpoint_path, dtype=np.int64)
 
-        grid_coord = pc_data_dict['grid_coord']
-        grid_coord = torch.cat([torch.LongTensor(grid_coord.shape[0], 1).fill_(0), grid_coord], 1)
-        pc_data_dict['grid_coord'] = grid_coord
+            # data transformation
+            transform = Compose(vqa_transform_eval)
+            pc_data_dict = dict(
+                scene_id=scan_file,
+                coord=coord,
+                color=color,
+                superpoint_mask=superpoint_mask
+            )
+            pc_data_dict = transform(pc_data_dict)
 
-        # voxelize
-        batch_size = 1
-        grid_coords = pc_data_dict["grid_coord"]
-        spatial_shape = np.clip((grid_coords.max(0)[0][1:] + 1).numpy(), 128, None)  # long [3]
-        voxel_coords, p2v_map, v2p_map = voxelization_idx(grid_coords, batch_size, 4)
+            grid_coord = pc_data_dict['grid_coord']
+            grid_coord = torch.cat([torch.LongTensor(grid_coord.shape[0], 1).fill_(0), grid_coord], 1)
+            pc_data_dict['grid_coord'] = grid_coord
 
-        for key in pc_data_dict:
-            if key in ["coord", "grid_coord", "feat", "offset"]:
-                pc_data_dict[key] = ponder_collate_fn([pc_data_dict[key]])
+            # voxelize
+            batch_size = 1
+            grid_coords = pc_data_dict["grid_coord"]
+            spatial_shape = np.clip((grid_coords.max(0)[0][1:] + 1).numpy(), 128, None)  # long [3]
+            voxel_coords, p2v_map, v2p_map = voxelization_idx(grid_coords, batch_size, 4)
+
+            for key in pc_data_dict:
+                if key in ["coord", "grid_coord", "feat", "offset"]:
+                    pc_data_dict[key] = ponder_collate_fn([pc_data_dict[key]])
 
         qs = source['text']
-        qs = template[0].format(question=qs)
+        qs = ("{question} Answer the question simply." if args.no_pc
+              else template[0]).format(question=qs)
         od_text = od_map.get(scan_file, "").strip()
         if od_text and retriever is not None:
             od_text = retriever.select_od_text(od_text, source['text'], args.od_topk)
         if od_text:
-            qs = qs.replace(
-                DEFAULT_IMAGE_TOKEN + "\n",
-                DEFAULT_IMAGE_TOKEN + "\n<od>\n" + od_text + "\n</od>\n",
-                1,
-            )
+            if args.no_pc:
+                # no <pc> token: the od block leads the prompt, exactly the
+                # training format (<od>\n...\n</od>\n{question})
+                qs = "<od>\n" + od_text + "\n</od>\n" + qs
+            else:
+                qs = qs.replace(
+                    DEFAULT_IMAGE_TOKEN + "\n",
+                    DEFAULT_IMAGE_TOKEN + "\n<od>\n" + od_text + "\n</od>\n",
+                    1,
+                )
 
         conv = conv_templates[args.conv_mode].copy()
         conv.append_message(conv.roles[0], qs)
@@ -158,13 +167,19 @@ def eval_model(args):
 
         device = model.device
         input_ids = tokenizer_special_token(prompt, tokenizer, return_tensors='pt').unsqueeze(0).to(device)
-        coord = pc_data_dict["coord"].to(device, dtype=torch.bfloat16)
-        voxel_coords = voxel_coords.to(device)
-        offset = pc_data_dict["offset"].to(device)
-        feat = pc_data_dict["feat"].to(device, dtype=torch.bfloat16)
-        p2v_map = p2v_map.to(device)
-        v2p_map = v2p_map.to(device)
-        superpoint_mask = [torch.tensor(superpoint_mask).to(device)]
+        if args.no_pc:
+            coord = voxel_coords = offset = feat = p2v_map = v2p_map = None
+            superpoint_mask = [[]]
+            conditions = ["textgen"]  # same value vqa_transform_eval sets
+        else:
+            coord = pc_data_dict["coord"].to(device, dtype=torch.bfloat16)
+            voxel_coords = voxel_coords.to(device)
+            offset = pc_data_dict["offset"].to(device)
+            feat = pc_data_dict["feat"].to(device, dtype=torch.bfloat16)
+            p2v_map = p2v_map.to(device)
+            v2p_map = v2p_map.to(device)
+            superpoint_mask = [torch.tensor(superpoint_mask).to(device)]
+            conditions = [pc_data_dict["condition"]]
 
         # move input tensors to gpu, defaut type is supposed to be bfloat16
         _oom_tries = 0
@@ -183,7 +198,7 @@ def eval_model(args):
                 v2p_map=v2p_map,
                 spatial_shape=spatial_shape,
                 superpoint_mask=superpoint_mask,
-                conditions=[pc_data_dict["condition"]],
+                conditions=conditions,
                 # do_sample=True if args.temperature > 0 else False,
                 do_sample=False,
                 temperature=1.0,
@@ -232,6 +247,8 @@ if __name__ == "__main__":
                         help="json {scene_id: od_text}; injects <od>...</od> after the image token")
     parser.add_argument("--od-topk", type=int, default=None,
                         help="with --od-file: per-question top-C class retrieval (scripts/od_retrieval.py)")
+    parser.add_argument("--no-pc", action="store_true",
+                        help="EXP-OD6: no point cloud input -- text-only prompt, od block leads")
     parser.add_argument("--top_p", type=float, default=None)
     parser.add_argument("--num_beams", type=int, default=1)
     args = parser.parse_args()

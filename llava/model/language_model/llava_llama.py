@@ -285,6 +285,11 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
         if not self.training:
             return llm_out
 
+        elif mask_input_dict is None:
+            # EXP-OD6 (no_pc): no point cloud was encoded -- the seg head has
+            # no input, return the pure LM loss (text-only training).
+            return llm_out
+
         else:
             out = self.forward_mask_decoder_train(
                 llm_out,

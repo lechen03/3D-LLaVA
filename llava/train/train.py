@@ -109,6 +109,9 @@ class DataArguments:
     scene_alignment_file: Optional[str] = field(default=None)
     extra_det_file: Optional[str] = field(default=None)
     refer_seg_with_click: bool = False
+    # EXP-OD6: skip point cloud loading/collation entirely (text-only batches;
+    # conversations must not contain <pc>/<image>/<loc> tokens)
+    no_pc: bool = False
 
 @dataclass
 class TrainingArguments(transformers.TrainingArguments):
@@ -867,7 +870,7 @@ class LazySupervisedDataset(Dataset):
             sources = preprocess_multimodal(
                 copy.deepcopy([e["conversations"] for e in sources]),
                 self.data_args)
-        elif 'scene_id' in sources[0]:
+        elif 'scene_id' in sources[0] and not self.data_args.no_pc:
             scene_id = sources[0]['scene_id']
             scene_name = scene_id.split('-')[-1]
             scan_folder = self.data_args.scan_folder
@@ -888,7 +891,7 @@ class LazySupervisedDataset(Dataset):
                 conv_sources = [copy.deepcopy(chosen_conv)]
             else:
                 conv_sources = sources
-            
+
             if 'task_type' in conv_sources[0].keys():
                 task_type = conv_sources[0]['task_type']
             else:
@@ -917,19 +920,24 @@ class LazySupervisedDataset(Dataset):
 
             if "pred_id" in conv_sources[0]:
                 pc_data_dict["pred_id"] = conv_sources[0]["pred_id"]
-            
+
             pc_data_dict = transform(pc_data_dict)
             targets = [e.get("target", None) for e in conv_sources]
-            
+
             conv_sources = preprocess_multimodal(
                 copy.deepcopy([e["conversations"] for e in conv_sources]),
                 self.data_args)
+        elif 'scene_id' in sources[0]:
+            # EXP-OD6 (no_pc): text-only sample -- skip pc loading/transform,
+            # conversations must already be free of <pc>/<image>/<loc> tokens.
+            conv_sources = copy.deepcopy([e["conversations"] for e in sources])
         else:
             sources = copy.deepcopy([e["conversations"] for e in sources])
+            conv_sources = sources
         data_dict = preprocess(
             conv_sources,
             self.tokenizer,
-            has_image=('image' in self.list_data_dict[i] or 'scene_id' in self.list_data_dict[i]),
+            has_image=('image' in self.list_data_dict[i] or 'scene_id' in self.list_data_dict[i]) and not self.data_args.no_pc,
             add_link_token=self.data_args.pc_use_link_token)
     
         if isinstance(i, int):
@@ -939,10 +947,10 @@ class LazySupervisedDataset(Dataset):
         # image exist in the data
         if 'image' in self.list_data_dict[i]:
             data_dict['image'] = image
-        elif 'scene_id' in self.list_data_dict[i]:
+        elif 'scene_id' in self.list_data_dict[i] and not self.data_args.no_pc:
             data_dict['scene_id'] = self.list_data_dict[i]['scene_id']
             data_dict.update(pc_data_dict)
-        elif self.data_args.is_multimodal:
+        elif self.data_args.is_multimodal and not self.data_args.no_pc:
             # image does not exist in the data, but the model is multimodal
             crop_size = self.data_args.image_processor.crop_size
             data_dict['image'] = torch.zeros(3, crop_size['height'], crop_size['width'])

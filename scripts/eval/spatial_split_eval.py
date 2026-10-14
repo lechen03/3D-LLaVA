@@ -52,7 +52,17 @@ RUNS = {
     "with_od_names": REPO / "playground/predictions/finetune-3d-llava-lora-with-od-names",
     "with_od_rel": REPO / "playground/predictions/finetune-3d-llava-lora-with-od-rel",
     "with_od_gt": REPO / "playground/predictions/finetune-3d-llava-lora-with-od-gt",
+    "with_od_gt_nopc": REPO / "playground/predictions/finetune-3d-llava-lora-with-od-gt-nopc",
 }
+
+
+def runs_for(task):
+    """EXP-OD6 (with_od_gt_nopc) is pc-free and only evaluated on the two VQA
+    tasks -- ref-seg masks decode from pc features and scan2cap designates its
+    target via <loc>, both architecturally impossible without a point cloud."""
+    if task in ("sqa3d", "scanqa"):
+        return RUNS
+    return {k: v for k, v in RUNS.items() if k != "with_od_gt_nopc"}
 
 EVAL_INFO = REPO / "playground/data/eval_info"
 
@@ -178,6 +188,18 @@ FULLCHECK_REF = {
     ("referseg_scanrefer", "baseline"): (0.4110, 0.5971, 0.3943),
     ("multi3drefer", "with_od"): (0.4690, 0.6489, 0.4576),
     ("multi3drefer", "baseline"): (0.4679, 0.6569, 0.4530),
+    # EXP-OD6 (no pc): real values extracted from
+    # playground/predictions/finetune-3d-llava-lora-with-od-gt-nopc/metrics_all.txt
+    ("sqa3d", "with_od_gt_nopc"): {
+        "[sqa3d] EM1": 0.5359477124183006,
+        "[sqa3d] EM1_refined": 0.5615231599886331,
+    },
+    ("scanqa", "with_od_gt_nopc"): {
+        "[scanqa] EM1": 0.2348663101604278,
+        "[scanqa] EM1_refined": 0.3890909090909091,
+        "[scanqa] Bleu_1": 0.4146370119043892,
+        "[scanqa] CIDEr": 0.8347954787074113,
+    },
 }
 
 MULTI3D_PROMPT_PREFIX = (
@@ -268,7 +290,7 @@ def task_vqa(task, question_file, ann_file, eval_module):
     n_right_only = sum(right_only_trigger(q["text"]) for q in questions)
 
     out = {"n_right_only_spatial": n_right_only}
-    for run, run_dir in RUNS.items():
+    for run, run_dir in runs_for(task).items():
         pred_raw = read_raw_lines(run_dir / task / "merge.jsonl")
         preds = [json.loads(line) for line in pred_raw]
         assert len(preds) == len(questions), f"{task}/{run}: merge line count"
@@ -334,7 +356,7 @@ def task_referseg(task, question_file, with_suffix, native_spatial=False):
     n_right_only = sum(right_only_trigger(q["description"]) for q in questions)
 
     out = {"n_right_only_spatial": n_right_only}
-    for run, run_dir in RUNS.items():
+    for run, run_dir in runs_for(task).items():
         preds = read_jsonl(run_dir / task / "merge.jsonl")
         assert len(preds) == len(questions), f"{task}/{run}: merge line count"
         for i, q in enumerate(questions):
@@ -368,12 +390,13 @@ def task_referseg(task, question_file, with_suffix, native_spatial=False):
 
 def task_scan2cap(question_file, corpus_file, pred_attrs, gt_attrs):
     """scan2cap: split by GT captions (output-side); cut corpus + result."""
+    task = "scan2cap"
     corpus = json.load(open(corpus_file))
     key_flags = {k: is_spatial(" ".join(v)) for k, v in corpus.items()}
     n_right_only = sum(right_only_trigger(" ".join(v)) for v in corpus.values())
 
     out = {"n_right_only_spatial": n_right_only}
-    for run, run_dir in RUNS.items():
+    for run, run_dir in runs_for(task).items():
         pred_raw = read_raw_lines(run_dir / "densecap_scanrefer" / "merge.jsonl")
         preds = [json.loads(line) for line in pred_raw]
         keys = [f"{p['scene_id']}|{p['gt_id']}" for p in preds]
