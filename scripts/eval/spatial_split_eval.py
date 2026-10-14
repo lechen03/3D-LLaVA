@@ -53,16 +53,19 @@ RUNS = {
     "with_od_rel": REPO / "playground/predictions/finetune-3d-llava-lora-with-od-rel",
     "with_od_gt": REPO / "playground/predictions/finetune-3d-llava-lora-with-od-gt",
     "with_od_gt_nopc": REPO / "playground/predictions/finetune-3d-llava-lora-with-od-gt-nopc",
+    "textonly": REPO / "playground/predictions/finetune-3d-llava-lora-textonly",
 }
 
 
 def runs_for(task):
-    """EXP-OD6 (with_od_gt_nopc) is pc-free and only evaluated on the two VQA
-    tasks -- ref-seg masks decode from pc features and scan2cap designates its
-    target via <loc>, both architecturally impossible without a point cloud."""
+    """EXP-OD6 (with_od_gt_nopc) and EXP-OD7 (textonly) are pc-free and only
+    evaluated on the two VQA tasks -- ref-seg masks decode from pc features
+    and scan2cap designates its target via <loc>, both architecturally
+    impossible without a point cloud."""
     if task in ("sqa3d", "scanqa"):
         return RUNS
-    return {k: v for k, v in RUNS.items() if k != "with_od_gt_nopc"}
+    return {k: v for k, v in RUNS.items()
+            if k not in ("with_od_gt_nopc", "textonly")}
 
 EVAL_INFO = REPO / "playground/data/eval_info"
 
@@ -199,6 +202,18 @@ FULLCHECK_REF = {
         "[scanqa] EM1_refined": 0.3890909090909091,
         "[scanqa] Bleu_1": 0.4146370119043892,
         "[scanqa] CIDEr": 0.8347954787074113,
+    },
+    # EXP-OD7 (question only): real values extracted from
+    # playground/predictions/finetune-3d-llava-lora-textonly/metrics_all.txt
+    ("sqa3d", "textonly"): {
+        "[sqa3d] EM1": 0.514919011082694,
+        "[sqa3d] EM1_refined": 0.5399261153736857,
+    },
+    ("scanqa", "textonly"): {
+        "[scanqa] EM1": 0.2051336898395722,
+        "[scanqa] EM1_refined": 0.34053475935828875,
+        "[scanqa] Bleu_1": 0.39769391674405374,
+        "[scanqa] CIDEr": 0.7775035817165206,
     },
 }
 

@@ -109,3 +109,5 @@ bash scripts/eval/multigpu_eval_all_with_od.sh
 *已完成后续实验：[EXP-OD5 Ground-Truth bbox 版](OD_INJECTION_GT_REPORT.md)（2026-10-12）——判别消融定论：GT 与预测框在 scanqa EM1 完美配对平手（+0.04, p=0.96）→ **检测器精度不是瓶颈、框级信息难以被 LLM 利用**；GT 的系列最高 VQA 数字（sqa3d 54.79）即清单效应天花板。系列六变体收官：价值 = names 清单 + topk 选择，改进检测器对此范式无回报。*
 
 *已完成后续实验：[EXP-OD6 去点云版](OD_INJECTION_NOPC_REPORT.md)（2026-10-14）——反向消融（OD5 去掉点云，仅 GT bbox 文本 + 问题，代码级 `--no-pc`）：**sqa3d 与完整多模态 baseline 配对平手（−0.40, p=0.61）——GT 框列表 + 语言先验可打平整个 3D 编码器**；scanqa −2~3 EM 显著、CIDEr −9.6。掉点类型化集中：非空间/颜色外观题（RGB 只在点云里）与 What 识别/Can-see 可见性题崩、How-many 计数题保住 OD 注入全部增益（+5.4 vs baseline，框列表可数）。ref-seg/scan2cap 无点云即任务不成立。*
+
+*已完成后续实验：[EXP-OD7 仅问题文本版](OD_INJECTION_TEXTONLY_REPORT.md)（2026-10-14）——语言先验地板 + 2×2 因子收官（baseline 仅点云 / OD5 点云+GT / OD6 仅GT / OD7 全无）：**语言先验地板 = sqa3d 51.5 / scanqa 20.5**；OD 文本无点云时因果贡献 +2.1/+3.0 显著，且边际效应随另一因子在场而缩水——**点云与 OD 文本是高冗余编码**（OD5 vs baseline 净增益仅 +0.8/+1.0）。How-many 计数题增益 100% 来自数框列表（OD6−OD7=+5.59，OD7 跌回 baseline 下）；Is 存在性题同样需要场景证据（预注册预测失手）。CIDEr 阶梯 93.1→91.8→83.5→77.8 单调。*
