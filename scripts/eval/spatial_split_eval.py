@@ -54,18 +54,22 @@ RUNS = {
     "with_od_gt": REPO / "playground/predictions/finetune-3d-llava-lora-with-od-gt",
     "with_od_gt_nopc": REPO / "playground/predictions/finetune-3d-llava-lora-with-od-gt-nopc",
     "textonly": REPO / "playground/predictions/finetune-3d-llava-lora-textonly",
+    "vqaonly": REPO / "playground/predictions/finetune-3d-llava-lora-vqaonly",
+    "with_od_gt_vqaonly": REPO / "playground/predictions/finetune-3d-llava-lora-with-od-gt-vqaonly",
 }
 
 
 def runs_for(task):
-    """EXP-OD6 (with_od_gt_nopc) and EXP-OD7 (textonly) are pc-free and only
-    evaluated on the two VQA tasks -- ref-seg masks decode from pc features
-    and scan2cap designates its target via <loc>, both architecturally
-    impossible without a point cloud."""
+    """EXP-OD6 (with_od_gt_nopc), EXP-OD7 (textonly) and EXP-OD8 (vqaonly,
+    with_od_gt_vqaonly) are only evaluated on the two VQA tasks -- the first
+    two are pc-free (ref-seg masks decode from pc features, scan2cap
+    designates its target via <loc>), the OD8 pair simply was not trained
+    for the other tasks (VQA-only training mix)."""
     if task in ("sqa3d", "scanqa"):
         return RUNS
     return {k: v for k, v in RUNS.items()
-            if k not in ("with_od_gt_nopc", "textonly")}
+            if k not in ("with_od_gt_nopc", "textonly",
+                         "vqaonly", "with_od_gt_vqaonly")}
 
 EVAL_INFO = REPO / "playground/data/eval_info"
 
@@ -214,6 +218,28 @@ FULLCHECK_REF = {
         "[scanqa] EM1_refined": 0.34053475935828875,
         "[scanqa] Bleu_1": 0.39769391674405374,
         "[scanqa] CIDEr": 0.7775035817165206,
+    },
+    # EXP-OD8 (pc + VQA-only training, with/without GT od): real values from
+    # playground/predictions/finetune-3d-llava-lora-{vqaonly,with-od-gt-vqaonly}/metrics_all.txt
+    ("sqa3d", "vqaonly"): {
+        "[sqa3d] EM1": 0.5427678317703893,
+        "[sqa3d] EM1_refined": 0.5680591077010514,
+    },
+    ("scanqa", "vqaonly"): {
+        "[scanqa] EM1": 0.24598930481283424,
+        "[scanqa] EM1_refined": 0.40085561497326205,
+        "[scanqa] Bleu_1": 0.4434061139947142,
+        "[scanqa] CIDEr": 0.9055887928012206,
+    },
+    ("sqa3d", "with_od_gt_vqaonly"): {
+        "[sqa3d] EM1": 0.5495879511224779,
+        "[sqa3d] EM1_refined": 0.5763000852514919,
+    },
+    ("scanqa", "with_od_gt_vqaonly"): {
+        "[scanqa] EM1": 0.24877005347593584,
+        "[scanqa] EM1_refined": 0.413475935828877,
+        "[scanqa] Bleu_1": 0.43333607186324985,
+        "[scanqa] CIDEr": 0.8836833014582737,
     },
 }
 

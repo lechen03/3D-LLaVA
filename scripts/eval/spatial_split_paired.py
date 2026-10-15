@@ -29,6 +29,8 @@ RUNS = {
     "with_od_gt": REPO / "playground/predictions/finetune-3d-llava-lora-with-od-gt",
     "with_od_gt_nopc": REPO / "playground/predictions/finetune-3d-llava-lora-with-od-gt-nopc",
     "textonly": REPO / "playground/predictions/finetune-3d-llava-lora-textonly",
+    "vqaonly": REPO / "playground/predictions/finetune-3d-llava-lora-vqaonly",
+    "with_od_gt_vqaonly": REPO / "playground/predictions/finetune-3d-llava-lora-with-od-gt-vqaonly",
 }
 EVAL_INFO = REPO / "playground/data/eval_info"
 
@@ -92,7 +94,14 @@ def analyze(task, ann_file, run_task_dir):
                           ("textonly", "baseline"),
                           ("textonly", "with_od_gt_nopc"),
                           ("textonly", "with_od_gt"),
-                          ("textonly", "with_od_names")]:
+                          ("textonly", "with_od_names"),
+                          # EXP-OD8 (pc + VQA-only training): mix-matched 2x2
+                          ("vqaonly", "textonly"),            # pc value, no OD
+                          ("with_od_gt_vqaonly", "with_od_gt_nopc"),  # pc value, with OD
+                          ("with_od_gt_vqaonly", "vqaonly"),  # OD marginal, matched mix
+                          ("vqaonly", "baseline"),            # multi-task transfer
+                          ("with_od_gt_vqaonly", "with_od_gt"),  # transfer, OD cell
+                          ("vqaonly", "with_od_gt_nopc")]:    # pc vs GT box text
         print(f"\n===== {task} EM1 paired ({run_a} vs {run_b}) =====")
         print(f"{'bucket':12s} {'n':>5s} {'base':>7s} {'od':>7s} {'delta':>7s} "
               f"{'b(od+base-)':>12s} {'c(od-base+)':>12s} {'p_exact':>9s}")
